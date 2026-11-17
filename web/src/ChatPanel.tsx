@@ -363,7 +363,7 @@ function MessageView(props: {
                 size="sm"
                 disabled={!props.canAnswer}
                 onClick={() => props.onAnswer(choice)}
-                className="h-auto min-h-7 py-1 text-left whitespace-normal"
+                className="h-auto min-h-7 max-w-full min-w-0 py-1 text-left whitespace-normal [overflow-wrap:anywhere]"
               >
                 {choice}
               </Button>
