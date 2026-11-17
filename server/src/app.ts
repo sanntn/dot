@@ -311,7 +311,10 @@ A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
   app.post("/tasks/:id/start", async (c) => {
     const task = store.getTask(idParam(c));
     if (task.column === "inbox") return c.json(orchestrator.startResearch(task.id));
-    if (task.column === "research") return c.json(orchestrator.resumeResearch(task.id));
+    if (task.column === "research") {
+      const started = store.latestRun(task.id, "research") !== null;
+      return c.json(started ? orchestrator.resumeResearch(task.id) : orchestrator.startResearch(task.id));
+    }
     if (task.column === "execute") return c.json(await orchestrator.startExecution(task.id));
     if (task.column === "review") return c.json(await orchestrator.startReview(task.id));
     throw new HttpError(409, "There is no agent to start for this column");

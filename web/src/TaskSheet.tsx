@@ -159,8 +159,10 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
       ? null
       : task.column === "inbox"
         ? "Start research"
-        : task.column === "research" && researchRun
-          ? "Resume researcher"
+        : task.column === "research"
+          ? researchRun
+            ? "Resume researcher"
+            : "Start research"
           : task.column === "execute"
             ? !executeRun
               ? "Start executor"

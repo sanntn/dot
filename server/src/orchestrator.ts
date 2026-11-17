@@ -165,10 +165,14 @@ export class Orchestrator {
 
   startResearch(taskId: number): Task {
     const task = this.store.getTask(taskId);
-    if (task.column !== "inbox") throw new HttpError(409, "Only tasks in the Inbox can start research");
+    // A card dragged into Research by hand has no run yet, so it can start from there too.
+    const inResearchUnstarted = task.column === "research" && !this.store.latestRun(taskId, "research");
+    if (task.column !== "inbox" && !inResearchUnstarted) {
+      throw new HttpError(409, "Only tasks in the Inbox can start research");
+    }
     const project = this.store.getProject(task.projectId);
 
-    this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
+    if (task.column === "inbox") this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
     this.store.setNeedsInput(taskId, false);
     const run = this.store.createRun(taskId, "research", randomUUID());
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Research started." });
