@@ -27,7 +27,7 @@ import type { Auth } from "./auth.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } from "./git.ts";
 import { GitHub } from "./github.ts";
-import { detectRemote } from "./githost.ts";
+import { detectRemote, parseRemoteUrl } from "./githost.ts";
 import type { Orchestrator } from "./orchestrator.ts";
 import type { Store } from "./store.ts";
 
@@ -173,7 +173,18 @@ export function createApp(
   app.get("/projects", (c) => c.json(store.listProjects()));
 
   app.post("/projects", async (c) => {
-    const { cloneRepo: toClone, ...data } = await parseBody(c, ProjectInputSchema);
+    const parsed = await parseBody(c, ProjectInputSchema);
+    const { cloneRepo: given, ...data } = parsed;
+    let toClone = given;
+    // A pasted remote URL in the path field means "clone this", not a folder called https:/github.com/...
+    if (!toClone && data.repoPath && /^([a-z][a-z0-9+.-]*:\/\/|[^\s@/]+@[^\s:/]+:)/i.test(data.repoPath.trim())) {
+      const remote = parseRemoteUrl(data.repoPath);
+      if (!remote.host || !remote.owner || !remote.name) {
+        throw new HttpError(400, `Dot can only clone from GitHub or Bitbucket, and couldn't read a host, owner and repo from ${data.repoPath}`);
+      }
+      toClone = `${remote.owner}/${remote.name}`;
+      data.repoHost ??= remote.host;
+    }
     let repoPath: string;
     let { baseBranch, repoHost, repoOwner, repoName } = data;
     if (toClone) {
@@ -242,9 +253,11 @@ export function createApp(
     // whether a token is set. You type its workspace/repo.
     const bitbucket = Boolean(process.env.DOT_BITBUCKET_TOKEN?.trim());
     const api = GitHub.fromEnv();
-    if (!api) return c.json({ configured: false, bitbucket, repos: [] });
+    // A deployed Dot has no local folders worth pointing at, so the dialog starts on cloning.
+    const deployed = !["127.0.0.1", "localhost", "::1"].includes(process.env.DOT_HOST?.trim() || "127.0.0.1");
+    if (!api) return c.json({ configured: false, bitbucket, deployed, repos: [] });
     try {
-      return c.json({ configured: true, bitbucket, repos: await api.listRepos() });
+      return c.json({ configured: true, bitbucket, deployed, repos: await api.listRepos() });
     } catch (err) {
       throw new HttpError(502, err instanceof Error ? err.message : String(err));
     }

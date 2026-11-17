@@ -43,7 +43,8 @@ export function ProjectDialog(props: {
   const [source, setSource] = useState<"path" | "clone">("path");
   const [cloneHost, setCloneHost] = useState<RepoHost>("github");
   // Whether Dot has a token for each host, so it knows which can be cloned from.
-  const [canClone, setCanClone] = useState(false);
+  const [canClone, setCanClone] = useState(true);
+  const [tokenMissing, setTokenMissing] = useState(false);
   const [repos, setRepos] = useState<{ fullName: string; defaultBranch: string; private: boolean }[]>([]);
   const [baseBranch, setBaseBranch] = useState(project?.baseBranch ?? "main");
   // "default" means no named token. Otherwise the name of a DOT_CLAUDE_TOKEN_<NAME> variable.
@@ -53,11 +54,11 @@ export function ProjectDialog(props: {
     if (project) return;
     api.githubRepos().then(
       (r) => {
-        if (!r.configured && !r.bitbucket) return;
         setRepos(r.repos);
-        setCanClone(true);
-        setCloneHost(r.configured ? "github" : "bitbucket");
-        setSource("clone");
+        setCloneHost(r.configured || !r.bitbucket ? "github" : "bitbucket");
+        // Without a token only public repos clone. Say so, and start on cloning anyway when deployed.
+        setTokenMissing(!r.configured && !r.bitbucket);
+        if (r.configured || r.bitbucket || r.deployed) setSource("clone");
       },
       () => undefined,
     );
@@ -149,6 +150,11 @@ export function ProjectDialog(props: {
                     <option key={r.fullName} value={r.fullName} />
                   ))}
                 </datalist>
+                {tokenMissing && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    No DOT_GITHUB_TOKEN or DOT_BITBUCKET_TOKEN is set on the server, so only public repositories can be cloned.
+                  </p>
+                )}
                 <button
                   type="button"
                   className="justify-self-start text-xs text-muted-foreground underline"
