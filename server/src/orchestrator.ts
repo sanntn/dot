@@ -15,7 +15,7 @@ import {
   type Task,
 } from "@dot/shared";
 import { z } from "zod";
-import { ClaudeProcess, describeToolUse, type ContentBlock, type StreamEvent } from "./agents/claude.ts";
+import { ClaudeProcess, claudeTokenFor, describeToolUse, type ContentBlock, type StreamEvent } from "./agents/claude.ts";
 import {
   RESEARCHER_ALLOWED_TOOLS,
   RESEARCHER_DENIED_TOOLS,
@@ -1108,7 +1108,11 @@ export class Orchestrator {
     // A session lives in the config folder it was created in, so a resume must use that folder
     // even if the project has switched accounts since. A fresh session takes the project's current one.
     const configDir = resume ? run.claudeConfigDir : project.claudeConfigDir;
-    if (!resume) this.store.setRunConfigDir(run.id, configDir);
+    const tokenName = resume ? run.claudeToken : project.claudeToken;
+    if (tokenName && !claudeTokenFor(tokenName)) {
+      throw new Error(`This project uses the Claude token "${tokenName}", but DOT_CLAUDE_TOKEN_${tokenName} is not set on the server.`);
+    }
+    if (!resume) this.store.setRunAccount(run.id, configDir, tokenName);
 
     this.store.updateRun(run.id, { status: "running", error: null });
     this.store.setAgentState(task.id, "running");
@@ -1132,6 +1136,7 @@ export class Orchestrator {
         deniedTools: stage.deniedTools,
         mcpUrl: `http://127.0.0.1:${this.config.port}/api/mcp/${live.token}`,
         configDir,
+        tokenName,
       },
       {
         onEvent: (event) => this.safely(task.id, () => this.onEvent(live, event, cwd)),

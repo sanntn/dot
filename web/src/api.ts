@@ -2,6 +2,7 @@ import type {
   AttachmentRef,
   ChatMessage,
   ClaudeAccount,
+  ClaudeTokens,
   ExecutionArtifact,
   Plan,
   PlanArtifact,
@@ -56,7 +57,9 @@ export const api = {
   createProject: (input: ProjectInput) => request<Project>("/projects", "POST", input),
   updateProject: (id: number, patch: ProjectPatch) => request<Project>(`/projects/${id}`, "PATCH", patch),
   deleteProject: (id: number) => request<void>(`/projects/${id}`, "DELETE"),
-  claudeAccount: (configDir: string | null) => request<ClaudeAccount>("/claude-account", "POST", { configDir }),
+  claudeAccount: (configDir: string | null, token: string | null = null) =>
+    request<ClaudeAccount>("/claude-account", "POST", { configDir, token }),
+  claudeTokens: () => request<ClaudeTokens>("/claude-tokens"),
   claudeLogin: (configDir: string) => request<{ url: string }>("/claude-login", "POST", { configDir }),
   claudeLoginStatus: (configDir: string) =>
     request<{ running: boolean; error: string | null }>("/claude-login-status", "POST", { configDir }),

@@ -79,7 +79,8 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 | `DOT_PASSWORD` | yes | The login password. Dot refuses to start on a network address without it. |
 | `DOT_ALLOWED_HOSTS` | yes | The domain you gave Coolify, such as `dot.example.com`. Requests to any other host name are rejected. Separate several with commas. |
 | `DOT_GITHUB_TOKEN` | yes | Fine-grained token with the permissions listed under GitHub above. Dot also uses it to clone and push. |
-| `DOT_CLAUDE_TOKEN` | yes | Run `claude setup-token` on your own machine and paste the result. Agents run on your subscription with it. |
+| `DOT_CLAUDE_TOKEN` | yes | Run `claude setup-token` on your own machine and paste the result. Agents run on your subscription with it. This is the default account. |
+| `DOT_CLAUDE_TOKEN_<NAME>` | no | One more account. Run `claude setup-token` while signed in to that account and add it as, say, `DOT_CLAUDE_TOKEN_WORK`. Names are upper case letters, digits and underscores. |
 | `DOT_SESSION_SECRET` | no | Signs the login cookie. Defaults to a value derived from the password. |
 | `DOT_GIT_NAME`, `DOT_GIT_EMAIL` | no | The identity on the executor's commits. Defaults to `Dot` and `dot@localhost`. |
 | `DOT_MAX_AGENTS` and the others above | no | Work the same as locally. |
@@ -89,6 +90,7 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 Notes:
 
 - Agents run shell commands inside the container as the `node` user, not on your server. Agents never get Dot's variables in their environment, but they run as the same user as the server, so one could still read the server's environment through `/proc`. Use a fine-grained GitHub token limited to the repos Dot works on.
+- To run a project on another account, open its settings and pick the token under Claude account. The list shows the names Dot found and never the values. A session keeps the token it started with, so changing a project's token affects new sessions only. Add or remove a token variable, then redeploy.
 - A project's Claude config folder still works, but the in-app Sign in button does not, because the sign-in callback goes to localhost. In the Coolify terminal, run `gosu node env CLAUDE_CONFIG_DIR=/data/home/.claude-work claude auth login` and set the same folder in the project.
 - Local use is unchanged. Without `DOT_HOST` and `DOT_PASSWORD`, Dot binds to loopback with no login.
 

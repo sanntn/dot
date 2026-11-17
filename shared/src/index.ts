@@ -61,6 +61,8 @@ const projectFields = z.object({
   devUrl: optionalText,
   // A CLAUDE_CONFIG_DIR for this project's agents, to use a different Claude login. Null uses the default.
   claudeConfigDir: optionalText,
+  // The name of a token the server holds as DOT_CLAUDE_TOKEN_<NAME>. Null uses the default login.
+  claudeToken: optionalText,
 });
 
 // A GitHub repository as "owner/name".
@@ -98,13 +100,16 @@ export const ProjectSchema = z.object({
   devCommand: z.string().nullable(),
   devUrl: z.string().nullable(),
   claudeConfigDir: z.string().nullable(),
+  claudeToken: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
 // Which Claude login a config folder holds, from `claude auth status`.
-export const ClaudeAccountQuerySchema = z.object({ configDir: optionalText });
+export const ClaudeAccountQuerySchema = z.object({ configDir: optionalText, token: optionalText });
+// Named tokens the server holds, for the project settings. `hasDefault` says DOT_CLAUDE_TOKEN is set.
+export type ClaudeTokens = { names: string[]; hasDefault: boolean };
 export type ClaudeAccount = {
   loggedIn: boolean;
   email: string | null;
@@ -321,6 +326,7 @@ export type Run = {
   sessionStarted: boolean;
   // The Claude config folder the session was created in, so a resume finds it. Null is the default login.
   claudeConfigDir: string | null;
+  claudeToken: string | null;
   status: RunStatus;
   costUsd: number;
   error: string | null;

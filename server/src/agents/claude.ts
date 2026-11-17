@@ -27,6 +27,8 @@ export type LaunchOptions = {
   mcpUrl: string;
   // CLAUDE_CONFIG_DIR for this launch, to use a project's own login. Null keeps Dot's own.
   configDir: string | null;
+  // The name of a DOT_CLAUDE_TOKEN_<NAME> variable to run as. Null uses the default login.
+  tokenName: string | null;
 };
 
 export type ProcessHandlers = {
@@ -46,26 +48,48 @@ const LOGIN_URL_WAIT_MS = 15_000;
 // session sets, so a Dot started from inside Claude Code behaves the same as from a terminal.
 // CLAUDE_CONFIG_DIR stays, since it says where your login lives, unless a project names its own.
 // DOT_* goes too: Dot's own settings include the Bitbucket and GitHub tokens, which no agent may see.
-function cleanEnv(configDir: string | null): NodeJS.ProcessEnv {
+// Named subscription tokens, one per account, from `claude setup-token`. They live in the server's
+// environment as DOT_CLAUDE_TOKEN_<NAME>, so no secret is stored in the database. Names are upper case.
+const TOKEN_PREFIX = "DOT_CLAUDE_TOKEN_";
+export const isTokenName = (name: string) => /^[A-Z0-9_]+$/.test(name);
+
+export function claudeTokenFor(name: string): string | null {
+  return isTokenName(name) ? process.env[`${TOKEN_PREFIX}${name}`]?.trim() || null : null;
+}
+
+export function claudeTokens(): { names: string[]; hasDefault: boolean } {
+  const names = Object.keys(process.env)
+    .filter((key) => key.startsWith(TOKEN_PREFIX) && process.env[key]?.trim())
+    .map((key) => key.slice(TOKEN_PREFIX.length))
+    .filter(isTokenName)
+    .sort();
+  return { names, hasDefault: Boolean(process.env.DOT_CLAUDE_TOKEN?.trim()) };
+}
+
+function cleanEnv(configDir: string | null, tokenName: string | null = null): NodeJS.ProcessEnv {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) => key === "CLAUDE_CONFIG_DIR" || !/^(CLAUDE|ANTHROPIC_|DOT_)/.test(key),
     ),
   );
   if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
-  // A deployed Dot has no browser to sign in with. DOT_CLAUDE_TOKEN holds the long-lived subscription
-  // token from `claude setup-token`. A project with its own config folder keeps its own login instead.
-  else if (process.env.DOT_CLAUDE_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = process.env.DOT_CLAUDE_TOKEN;
+  // A deployed Dot has no browser to sign in with, so it runs on long-lived subscription tokens.
+  // A project's named token wins. Without one, a project with its own config folder keeps that
+  // folder's login, and everything else uses DOT_CLAUDE_TOKEN.
+  const named = tokenName ? claudeTokenFor(tokenName) : null;
+  const fallback = !configDir ? process.env.DOT_CLAUDE_TOKEN?.trim() : undefined;
+  const token = named ?? fallback;
+  if (token) env.CLAUDE_CODE_OAUTH_TOKEN = token;
   return env;
 }
 
 // Asks the CLI which account a config folder is logged into.
-export function claudeAccount(configDir: string | null): Promise<ClaudeAccount> {
+export function claudeAccount(configDir: string | null, tokenName: string | null = null): Promise<ClaudeAccount> {
   return new Promise((resolve, reject) => {
     execFile(
       claudeBinary(),
       ["auth", "status", "--json"],
-      { env: cleanEnv(configDir), windowsHide: true, timeout: 30_000 },
+      { env: cleanEnv(configDir, tokenName), windowsHide: true, timeout: 30_000 },
       (err, stdout) => {
         // auth status exits nonzero when logged out, but still prints the JSON.
         let data: Record<string, unknown>;
@@ -216,7 +240,7 @@ export class ClaudeProcess {
 
     this.child = spawn(claudeBinary(), args, {
       cwd: options.cwd,
-      env: cleanEnv(options.configDir),
+      env: cleanEnv(options.configDir, options.tokenName),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

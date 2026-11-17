@@ -1,4 +1,4 @@
-import { REPO_HOST_LABELS, type ClaudeAccount, type Project, type ProjectInput, type RemoteInfo, type RepoHost } from "@dot/shared";
+import { REPO_HOST_LABELS, type ClaudeAccount, type ClaudeTokens, type Project, type ProjectInput, type RemoteInfo, type RepoHost } from "@dot/shared";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,8 @@ export function ProjectDialog(props: {
   const [source, setSource] = useState<"path" | "github">("path");
   const [repos, setRepos] = useState<{ fullName: string; defaultBranch: string; private: boolean }[]>([]);
   const [baseBranch, setBaseBranch] = useState(project?.baseBranch ?? "main");
+  // "default" means no named token. Otherwise the name of a DOT_CLAUDE_TOKEN_<NAME> variable.
+  const [claudeToken, setClaudeToken] = useState(project?.claudeToken ?? "default");
 
   useEffect(() => {
     if (project) return;
@@ -79,6 +81,7 @@ export function ProjectDialog(props: {
       baseBranch: text("baseBranch") || "main",
       browserTesting: form.get("browserTesting") === "on",
       claudeConfigDir: text("claudeConfigDir") || null,
+      claudeToken: claudeToken === "default" ? null : claudeToken,
       repoHost: repoHost === "auto" ? null : repoHost,
       repoOwner: text("repoOwner") || null,
       repoName: text("repoName") || null,
@@ -207,7 +210,12 @@ export function ProjectDialog(props: {
             </div>
           </fieldset>
 
-          <ClaudeAccountField id={`${id}-claudeConfigDir`} initial={project?.claudeConfigDir ?? ""} />
+          <ClaudeAccountField
+            id={`${id}-claudeConfigDir`}
+            initial={project?.claudeConfigDir ?? ""}
+            token={claudeToken}
+            onTokenChange={setClaudeToken}
+          />
 
           {error && (
             <Alert variant="destructive">
@@ -355,7 +363,14 @@ function PullRequestFields(props: {
 }
 
 // The Claude login this project's agents use. Blank uses the one Dot itself runs with.
-function ClaudeAccountField({ id, initial }: { id: string; initial: string }) {
+function ClaudeAccountField(props: {
+  id: string;
+  initial: string;
+  token: string;
+  onTokenChange: (token: string) => void;
+}) {
+  const { id, initial, token, onTokenChange } = props;
+  const [tokens, setTokens] = useState<ClaudeTokens | null>(null);
   const [dir, setDir] = useState(initial);
   const [checked, setChecked] = useState<{ dir: string; account: ClaudeAccount } | null>(null);
   const [checking, setChecking] = useState(false);
@@ -393,11 +408,14 @@ function ClaudeAccountField({ id, initial }: { id: string; initial: string }) {
     }
   }
 
-  async function check(value: string) {
+  async function check(value: string, tokenName = token) {
     setChecking(true);
     setError(null);
     try {
-      setChecked({ dir: value, account: await api.claudeAccount(value.trim() || null) });
+      setChecked({
+        dir: value,
+        account: await api.claudeAccount(value.trim() || null, tokenName === "default" ? null : tokenName),
+      });
     } catch (err) {
       setChecked(null);
       setError(errorMessage(err));
@@ -409,6 +427,7 @@ function ClaudeAccountField({ id, initial }: { id: string; initial: string }) {
   // Show who the saved setting logs in as when the dialog opens.
   useEffect(() => {
     void check(initial);
+    api.claudeTokens().then(setTokens, () => undefined);
   }, []);
 
   const account = checked && checked.dir === dir ? checked.account : null;
@@ -417,6 +436,33 @@ function ClaudeAccountField({ id, initial }: { id: string; initial: string }) {
   return (
     <fieldset className="grid gap-3 rounded-lg border p-4">
       <legend className="px-1 text-sm font-medium">Claude account</legend>
+      {tokens && tokens.names.length > 0 && (
+        <div className="grid gap-2">
+          <Label htmlFor={`${id}-token`}>Claude token</Label>
+          <p id={`${id}-token-hint`} className="text-xs text-muted-foreground">
+            Each token is one account, set on the server as DOT_CLAUDE_TOKEN_NAME. It takes priority over the config folder below.
+          </p>
+          <Select
+            value={token}
+            onValueChange={(value) => {
+              onTokenChange(value);
+              void check(dir, value);
+            }}
+          >
+            <SelectTrigger id={`${id}-token`} className="w-full" aria-describedby={`${id}-token-hint`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">{tokens.hasDefault ? "Default token (DOT_CLAUDE_TOKEN)" : "Default login"}</SelectItem>
+              {tokens.names.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div className="grid gap-2">
         <Label htmlFor={id}>Claude config folder</Label>
         <p id={`${id}-hint`} className="text-xs text-muted-foreground">

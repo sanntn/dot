@@ -21,7 +21,7 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import type { EventBus } from "./events.ts";
-import { claudeAccount, claudeLoginStatus, startClaudeLogin } from "./agents/claude.ts";
+import { claudeAccount, claudeLoginStatus, claudeTokenFor, claudeTokens, startClaudeLogin } from "./agents/claude.ts";
 import type { Auth } from "./auth.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } from "./git.ts";
@@ -111,6 +111,16 @@ function checkConfigDir(path: string | null | undefined): string | null {
   return resolve(expanded);
 }
 
+// A project names one of the server's Claude tokens (DOT_CLAUDE_TOKEN_<NAME>). Blank means the default login.
+function checkTokenName(name: string | null | undefined): string | null {
+  const trimmed = name?.trim().toUpperCase();
+  if (!trimmed) return null;
+  if (!claudeTokenFor(trimmed)) {
+    throw new HttpError(400, `DOT_CLAUDE_TOKEN_${trimmed} is not set on the server. Add it to the environment and restart Dot.`);
+  }
+  return trimmed;
+}
+
 export function createApp(
   store: Store,
   bus: EventBus,
@@ -195,6 +205,7 @@ A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
       repoOwner,
       repoName,
       claudeConfigDir: checkConfigDir(data.claudeConfigDir),
+      claudeToken: checkTokenName(data.claudeToken),
     });
     bus.publish({ type: "projects.changed" });
     return c.json(project, 201);
@@ -204,6 +215,7 @@ A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
     const patch = await parseBody(c, ProjectPatchSchema);
     if (patch.repoPath !== undefined) patch.repoPath = checkRepoPath(patch.repoPath);
     if (patch.claudeConfigDir !== undefined) patch.claudeConfigDir = checkConfigDir(patch.claudeConfigDir);
+    if (patch.claudeToken !== undefined) patch.claudeToken = checkTokenName(patch.claudeToken);
     const project = store.updateProject(idParam(c), patch);
     bus.publish({ type: "projects.changed" });
     return c.json(project);
@@ -232,16 +244,20 @@ A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
     }
   });
 
+  // The names of the Claude tokens set on the server, for the project settings. Never the values.
+  app.get("/claude-tokens", (c) => c.json(claudeTokens()));
+
   // Which account a config folder is logged into, for the project settings. POST keeps the path out of URLs.
   app.post("/claude-account", async (c) => {
-    const { configDir } = await parseBody(c, ClaudeAccountQuerySchema);
+    const { configDir, token } = await parseBody(c, ClaudeAccountQuerySchema);
     const dir = checkConfigDir(configDir);
+    const tokenName = checkTokenName(token);
     // The CLI creates the folder just by checking it, so don't ask about one that isn't there yet.
-    if (dir && !existsSync(dir)) {
+    if (dir && !tokenName && !existsSync(dir)) {
       return c.json({ loggedIn: false, email: null, orgName: null, subscriptionType: null, configDirectory: dir });
     }
     try {
-      return c.json(await claudeAccount(dir));
+      return c.json(await claudeAccount(dir, tokenName));
     } catch (err) {
       throw new HttpError(502, `Could not ask the claude CLI: ${err instanceof Error ? err.message : String(err)}`);
     }

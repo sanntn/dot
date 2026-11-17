@@ -125,6 +125,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE UNIQUE INDEX tasks_project_number ON tasks(project_id, number);
   `,
+  `
+  -- A project can pick a named Claude token (DOT_CLAUDE_TOKEN_<NAME> in the server's environment).
+  -- Each run remembers the one its session started with, so a resume never switches account.
+  ALTER TABLE projects ADD COLUMN claude_token TEXT;
+  ALTER TABLE runs ADD COLUMN claude_token TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;

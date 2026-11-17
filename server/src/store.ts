@@ -53,6 +53,7 @@ const PROJECT_COLUMNS = {
   devCommand: "dev_command",
   devUrl: "dev_url",
   claudeConfigDir: "claude_config_dir",
+  claudeToken: "claude_token",
 } as const satisfies Record<keyof ProjectPatchData, string>;
 
 const now = () => new Date().toISOString();
@@ -82,6 +83,7 @@ function toProject(row: Row): Project {
     devCommand: row.dev_command as string | null,
     devUrl: row.dev_url as string | null,
     claudeConfigDir: row.claude_config_dir as string | null,
+    claudeToken: row.claude_token as string | null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -116,6 +118,7 @@ function toRun(row: Row): Run {
     sessionId: row.session_id as string,
     sessionStarted: row.session_started === 1,
     claudeConfigDir: row.claude_config_dir as string | null,
+    claudeToken: row.claude_token as string | null,
     status: row.status as RunStatus,
     costUsd: row.cost_usd as number,
     error: row.error as string | null,
@@ -307,8 +310,8 @@ export class Store {
 
   // Recorded at each fresh launch, before the CLI creates the session, so it always names the
   // folder the session ends up in.
-  setRunConfigDir(id: number, dir: string | null): void {
-    this.db.prepare("UPDATE runs SET claude_config_dir = ? WHERE id = ?").run(dir, id);
+  setRunAccount(id: number, dir: string | null, token: string | null): void {
+    this.db.prepare("UPDATE runs SET claude_config_dir = ?, claude_token = ? WHERE id = ?").run(dir, token, id);
   }
 
   markSessionStarted(id: number): void {
