@@ -168,7 +168,7 @@ export function App() {
                 <FolderGit2 aria-hidden="true" />
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper" align="start">
                 {projects.map((p) => (
                   <SelectItem key={p.id} value={String(p.id)}>
                     {p.name}
