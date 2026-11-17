@@ -31,14 +31,14 @@ function loginToken(configDir: string | null): string {
   try {
     oauth = obj(obj(JSON.parse(readFileSync(join(dir, ".credentials.json"), "utf8")))?.claudeAiOauth);
   } catch {
-    throw new HttpError(502, `No Claude login found in ${dir}. Sign in with claude auth login, or set DOT_CLAUDE_TOKEN.`);
+    throw new HttpError(422, `No Claude login found in ${dir}. Sign in with claude auth login, or set DOT_CLAUDE_TOKEN.`);
   }
   const token = str(oauth?.accessToken);
-  if (!token) throw new HttpError(502, `The login in ${dir} has no access token. Sign in again with claude auth login.`);
+  if (!token) throw new HttpError(422, `The login in ${dir} has no access token. Sign in again with claude auth login.`);
   const expires = num(oauth?.expiresAt);
   // Dot never refreshes the token itself. Refresh tokens rotate, so doing it here could sign the CLI out.
   if (expires !== null && expires < Date.now()) {
-    throw new HttpError(502, "The Claude login has expired. Run claude once to refresh it, then reload the limits.");
+    throw new HttpError(422, "The Claude login has expired. Run claude once to refresh it, then reload the limits.");
   }
   return token;
 }
@@ -128,22 +128,22 @@ export async function claudeUsage(configDir: string | null, tokenName: string | 
     });
   } catch (err) {
     if (cached) return cached.usage;
-    throw new HttpError(502, `Could not reach Anthropic: ${err instanceof Error ? err.message : String(err)}`);
+    throw new HttpError(422, `Could not reach Anthropic: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (res.status === 401 || res.status === 403) {
     throw new HttpError(
-      502,
+      422,
       "This login can't read limits. Tokens from claude setup-token only cover inference. Use a browser login (claude auth login) for this account.",
     );
   }
   if (!res.ok) {
     // A rate-limited or failing endpoint still has a fresh-enough answer from a minute ago.
     if (cached) return cached.usage;
-    throw new HttpError(502, `Anthropic answered ${res.status} when asked for limits`);
+    throw new HttpError(422, `Anthropic answered ${res.status} when asked for limits`);
   }
 
   const data = obj(await res.json().catch(() => null));
-  if (!data) throw new HttpError(502, "Anthropic sent limits in a format Dot does not recognize");
+  if (!data) throw new HttpError(422, "Anthropic sent limits in a format Dot does not recognize");
   const usage: ClaudeUsage = { limits: parseLimits(data), spend: parseSpend(data), fetchedAt: new Date().toISOString() };
   cache.set(key, { at: Date.now(), usage });
   return usage;
