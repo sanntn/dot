@@ -27,6 +27,8 @@ RUN chmod +x /usr/local/bin/dot-entrypoint
 
 # /data holds everything that must survive a redeploy: the database, clones, worktrees,
 # chat images, and the Claude login (HOME is /data/home).
+# VOLUME alone does not persist anything on Coolify: each deploy gets a fresh anonymous
+# volume. Add a named persistent storage mount at /data in Coolify before the first deploy.
 ENV NODE_ENV=production \
     HOME=/data/home \
     DOT_DATA_DIR=/data/dot \

@@ -71,7 +71,7 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 
 1. Push this repo to a private GitHub repository.
 2. In Coolify, add a new resource from that repository and pick the Dockerfile build pack. Set the port to `4317` and give it a domain.
-3. Add one persistent storage mount at `/data`. It holds the database, cloned repos, worktrees, chat images and the Claude login. Without it every redeploy wipes your tasks.
+3. Add one persistent storage mount at `/data`, as a named volume, before the first deploy. It holds the database, cloned repos, worktrees, chat images and the Claude login. The `VOLUME /data` line in the Dockerfile is not enough: without the mount in Coolify, every redeploy starts with an empty `/data` and your tasks are gone. If that already happened, the old data may still sit in an orphaned volume (`docker volume ls` on the server). Copy `dot/dot.db` from it into the new volume.
 4. Set these environment variables:
 
 | Variable | Required | What it does |
