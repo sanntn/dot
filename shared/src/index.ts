@@ -102,6 +102,10 @@ export const ProjectSchema = z.object({
   devUrl: z.string().nullable(),
   claudeConfigDir: z.string().nullable(),
   claudeToken: z.string().nullable(),
+  // True when the folder is a clone Dot made in its own repos folder, so deleting the project can remove it.
+  cloned: z.boolean().optional(),
+  // Set when the base branch asked for did not exist in the clone and Dot used the repo's default instead.
+  baseBranchNote: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

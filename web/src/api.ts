@@ -57,7 +57,8 @@ export const api = {
   listProjects: () => request<Project[]>("/projects"),
   createProject: (input: ProjectInput) => request<Project>("/projects", "POST", input),
   updateProject: (id: number, patch: ProjectPatch) => request<Project>(`/projects/${id}`, "PATCH", patch),
-  deleteProject: (id: number) => request<void>(`/projects/${id}`, "DELETE"),
+  deleteProject: (id: number, removeFolder = false) =>
+    request<void>(`/projects/${id}${removeFolder ? "?removeFolder=1" : ""}`, "DELETE"),
   claudeAccount: (configDir: string | null, token: string | null = null) =>
     request<ClaudeAccount>("/claude-account", "POST", { configDir, token }),
   claudeUsage: (configDir: string | null, token: string | null = null) =>

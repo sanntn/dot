@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  type Project,
   ClaudeAccountQuerySchema,
   RemoteQuerySchema,
   IMAGE_TYPES,
@@ -171,11 +172,20 @@ export function createApp(
     return c.body(null, 204);
   });
 
-  app.get("/projects", (c) => c.json(store.listProjects()));
+  // A folder is Dot's own clone when it sits directly inside the repos folder. Only those are ever deleted.
+  const reposRoot = resolve(options.reposDir);
+  const isClone = (repoPath: string) => {
+    const path = resolve(repoPath);
+    return dirname(path) === reposRoot && basename(path) !== "";
+  };
+  const withClone = (project: Project): Project => ({ ...project, cloned: isClone(project.repoPath) });
+
+  app.get("/projects", (c) => c.json(store.listProjects().map(withClone)));
 
   app.post("/projects", async (c) => {
     const parsed = await parseBody(c, ProjectInputSchema);
     const { cloneRepo: given, ...data } = parsed;
+    let baseBranchNote: string | undefined;
     let toClone = given;
     // A pasted remote URL in the path field means "clone this", not a folder called https:/github.com/...
     if (!toClone && data.repoPath && /^([a-z][a-z0-9+.-]*:\/\/|[^\s@/]+@[^\s:/]+:)/i.test(data.repoPath.trim())) {
@@ -201,7 +211,10 @@ export function createApp(
             : "DOT_GITHUB_TOKEN with Contents access to the repository";
         try {
           const checkedOut = await cloneRepo(`https://${domain}/${owner}/${name}.git`, repoPath);
-          if (!(await branchExistsLocally(repoPath, baseBranch)) && checkedOut) baseBranch = checkedOut;
+          if (!(await branchExistsLocally(repoPath, baseBranch)) && checkedOut) {
+            baseBranchNote = `The repository has no branch "${baseBranch}", so Dot set the base branch to "${checkedOut}", its default.`;
+            baseBranch = checkedOut;
+          }
         } catch (err) {
           throw new HttpError(502, `Could not clone ${toClone} from ${REPO_HOST_LABELS[host]}: ${gitError(err)}\nA deployed Dot needs ${needs}.`);
         }
@@ -223,7 +236,7 @@ export function createApp(
       claudeToken: checkTokenName(data.claudeToken),
     });
     bus.publish({ type: "projects.changed" });
-    return c.json(project, 201);
+    return c.json({ ...withClone(project), baseBranchNote }, 201);
   });
 
   app.patch("/projects/:id", async (c) => {
@@ -233,17 +246,34 @@ export function createApp(
     if (patch.claudeToken !== undefined) patch.claudeToken = checkTokenName(patch.claudeToken);
     const project = store.updateProject(idParam(c), patch);
     bus.publish({ type: "projects.changed" });
-    return c.json(project);
+    return c.json(withClone(project));
   });
 
+  // ?removeFolder=1 also deletes the clone from disk. Only clones Dot made, and only when no other
+  // project still uses the folder.
   app.delete("/projects/:id", async (c) => {
     const id = idParam(c);
+    const removeFolder = c.req.query("removeFolder") === "1";
+    const target = store.listProjects().find((p) => p.id === id);
+    if (removeFolder) {
+      if (!target) throw notFound("Project");
+      if (!isClone(target.repoPath)) throw new HttpError(400, "Dot only deletes folders it cloned itself.");
+      const sharedBy = store.listProjects().find((p) => p.id !== id && resolve(p.repoPath) === resolve(target.repoPath));
+      if (sharedBy) throw new HttpError(409, `The folder is also used by the project "${sharedBy.name}".`);
+    }
     const tasks = store.listTasks(id);
     // Stop first and wait for exit, so no agent holds its worktree folder while it is removed.
     await Promise.all(tasks.map((task) => orchestrator.stop(task.id)));
     for (const task of tasks) await orchestrator.cleanupWorkspace(task.id);
     store.deleteProject(id);
     for (const task of tasks) removeAttachments(task.id);
+    if (removeFolder && target) {
+      try {
+        rmSync(resolve(target.repoPath), { recursive: true, force: true });
+      } catch (err) {
+        throw new HttpError(500, `The project was deleted, but its folder could not be removed: ${gitError(err)}`);
+      }
+    }
     bus.publish({ type: "projects.changed" });
     return c.body(null, 204);
   });

@@ -37,6 +37,8 @@ export function ProjectDialog(props: {
   const [open, setOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [removeFolder, setRemoveFolder] = useState(false);
   const [repoPath, setRepoPath] = useState(project?.repoPath ?? "");
   const [repoHost, setRepoHost] = useState<RepoHost | "auto">(project?.repoHost ?? "auto");
   // A new project can name a GitHub repository for Dot to clone, when a GitHub token is set.
@@ -94,10 +96,25 @@ export function ProjectDialog(props: {
     };
     for (const field of TEXT_FIELDS) input[field.name] = text(field.name) || null;
 
-    void run(async () => {
-      const saved = project ? await api.updateProject(project.id, input) : await api.createProject(input);
-      props.onSaved(saved);
-    });
+    // Once saved, the button only closes. A base branch swap stays on screen until it is read.
+    if (notice) {
+      setOpen(false);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    (project ? api.updateProject(project.id, input) : api.createProject(input)).then(
+      (saved) => {
+        props.onSaved(saved);
+        if (saved.baseBranchNote) setNotice(saved.baseBranchNote);
+        else setOpen(false);
+        setBusy(false);
+      },
+      (err) => {
+        setError(errorMessage(err));
+        setBusy(false);
+      },
+    );
   }
 
   return (
@@ -245,25 +262,53 @@ export function ProjectDialog(props: {
             </Alert>
           )}
 
+          {notice && (
+            <Alert>
+              <AlertDescription>{notice}</AlertDescription>
+            </Alert>
+          )}
+
           <DialogFooter>
-            {project && (
+            {project && !notice && (
               <ConfirmButton
                 label="Delete project"
                 title="Delete this project?"
-                description={`"${project.name}" and all its tasks will be removed. The repo on disk is not touched. This cannot be undone.`}
+                description={
+                  <span className="grid gap-3">
+                    <span>
+                      "{project.name}" and all its tasks will be removed.
+                      {project.cloned ? "" : " The repo on disk is not touched."} This cannot be undone.
+                    </span>
+                    {project.cloned && (
+                      <span className="flex items-start gap-2">
+                        <Checkbox
+                          id={`${id}-removeFolder`}
+                          checked={removeFolder}
+                          onCheckedChange={(checked) => setRemoveFolder(checked === true)}
+                          className="mt-0.5"
+                        />
+                        <Label htmlFor={`${id}-removeFolder`} className="leading-snug font-normal">
+                          Also delete the cloned folder from disk ({project.repoPath})
+                        </Label>
+                      </span>
+                    )}
+                  </span>
+                }
                 confirmLabel="Delete project"
                 disabled={busy}
                 className="sm:mr-auto"
-                onConfirm={() => void run(() => api.deleteProject(project.id))}
+                onConfirm={() => void run(() => api.deleteProject(project.id, project.cloned === true && removeFolder))}
               />
             )}
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                Cancel
-              </Button>
-            </DialogClose>
+            {!notice && (
+              <DialogClose asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </DialogClose>
+            )}
             <Button type="submit" disabled={busy}>
-              {project ? "Save" : "Add project"}
+              {notice ? "Done" : project ? "Save" : "Add project"}
             </Button>
           </DialogFooter>
         </form>
