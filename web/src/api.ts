@@ -52,7 +52,7 @@ export const api = {
   login: (password: string) => request<void>("/login", "POST", { password }),
   logout: () => request<void>("/logout", "POST"),
   githubRepos: () =>
-    request<{ configured: boolean; repos: { fullName: string; defaultBranch: string; private: boolean }[] }>("/github/repos"),
+    request<{ configured: boolean; bitbucket: boolean; repos: { fullName: string; defaultBranch: string; private: boolean }[] }>("/github/repos"),
   listProjects: () => request<Project[]>("/projects"),
   createProject: (input: ProjectInput) => request<Project>("/projects", "POST", input),
   updateProject: (id: number, patch: ProjectPatch) => request<Project>(`/projects/${id}`, "PATCH", patch),

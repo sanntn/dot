@@ -40,7 +40,10 @@ export function ProjectDialog(props: {
   const [repoPath, setRepoPath] = useState(project?.repoPath ?? "");
   const [repoHost, setRepoHost] = useState<RepoHost | "auto">(project?.repoHost ?? "auto");
   // A new project can name a GitHub repository for Dot to clone, when a GitHub token is set.
-  const [source, setSource] = useState<"path" | "github">("path");
+  const [source, setSource] = useState<"path" | "clone">("path");
+  const [cloneHost, setCloneHost] = useState<RepoHost>("github");
+  // Whether Dot has a token for each host, so it knows which can be cloned from.
+  const [canClone, setCanClone] = useState(false);
   const [repos, setRepos] = useState<{ fullName: string; defaultBranch: string; private: boolean }[]>([]);
   const [baseBranch, setBaseBranch] = useState(project?.baseBranch ?? "main");
   // "default" means no named token. Otherwise the name of a DOT_CLAUDE_TOKEN_<NAME> variable.
@@ -50,9 +53,11 @@ export function ProjectDialog(props: {
     if (project) return;
     api.githubRepos().then(
       (r) => {
-        if (!r.configured) return;
+        if (!r.configured && !r.bitbucket) return;
         setRepos(r.repos);
-        setSource("github");
+        setCanClone(true);
+        setCloneHost(r.configured ? "github" : "bitbucket");
+        setSource("clone");
       },
       () => undefined,
     );
@@ -77,12 +82,12 @@ export function ProjectDialog(props: {
     const text = (name: string) => String(form.get(name) ?? "").trim();
     const input: ProjectInput = {
       name: text("name"),
-      ...(source === "github" && !project ? { githubRepo: text("githubRepo") } : { repoPath: text("repoPath") }),
+      ...(source === "clone" && !project ? { cloneRepo: text("cloneRepo") } : { repoPath: text("repoPath") }),
       baseBranch: text("baseBranch") || "main",
       browserTesting: form.get("browserTesting") === "on",
       claudeConfigDir: text("claudeConfigDir") || null,
       claudeToken: claudeToken === "default" ? null : claudeToken,
-      repoHost: repoHost === "auto" ? null : repoHost,
+      repoHost: source === "clone" && !project ? cloneHost : repoHost === "auto" ? null : repoHost,
       repoOwner: text("repoOwner") || null,
       repoName: text("repoName") || null,
     };
@@ -101,7 +106,7 @@ export function ProjectDialog(props: {
           <DialogHeader>
             <DialogTitle>{project ? "Project settings" : "New project"}</DialogTitle>
             <DialogDescription>
-              A project points Dot at a git repo, either a folder on this machine or a GitHub repository Dot clones. Agents work in worktrees of that repo.
+              A project points Dot at a git repo, either a folder on this machine or a GitHub or Bitbucket repository Dot clones. Agents work in worktrees of that repo.
             </DialogDescription>
           </DialogHeader>
 
@@ -111,23 +116,34 @@ export function ProjectDialog(props: {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
-            {source === "github" && !project ? (
+            {source === "clone" && !project ? (
               <div className="grid gap-2">
-                <Label htmlFor={`${id}-githubRepo`}>GitHub repository</Label>
+                <Label htmlFor={`${id}-cloneRepo`}>{cloneHost === "bitbucket" ? "Bitbucket repository" : "GitHub repository"}</Label>
+                <div className="flex gap-2">
+                  <Select value={cloneHost} onValueChange={(v) => setCloneHost(v as RepoHost)}>
+                    <SelectTrigger aria-label="Host" className="w-32 shrink-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="github">GitHub</SelectItem>
+                      <SelectItem value="bitbucket">Bitbucket</SelectItem>
+                    </SelectContent>
+                  </Select>
                 <Input
-                  id={`${id}-githubRepo`}
-                  name="githubRepo"
+                  id={`${id}-cloneRepo`}
+                  name="cloneRepo"
                   required
-                  list={`${id}-repos`}
-                  placeholder="owner/name"
+                  list={cloneHost === "github" ? `${id}-repos` : undefined}
+                  placeholder={cloneHost === "bitbucket" ? "workspace/repo-slug" : "owner/name"}
                   spellCheck={false}
                   autoComplete="off"
                   className="font-mono"
                   onChange={(e) => {
                     const match = repos.find((r) => r.fullName === e.target.value);
-                    if (match) setBaseBranch(match.defaultBranch);
+                    if (cloneHost === "github" && match) setBaseBranch(match.defaultBranch);
                   }}
                 />
+                </div>
                 <datalist id={`${id}-repos`}>
                   {repos.map((r) => (
                     <option key={r.fullName} value={r.fullName} />
@@ -154,13 +170,13 @@ export function ProjectDialog(props: {
                   spellCheck={false}
                   className="font-mono"
                 />
-                {!project && repos.length > 0 && (
+                {!project && canClone && (
                   <button
                     type="button"
                     className="justify-self-start text-xs text-muted-foreground underline"
-                    onClick={() => setSource("github")}
+                    onClick={() => setSource("clone")}
                   >
-                    Clone a GitHub repository instead
+                    Clone a repository instead
                   </button>
                 )}
               </div>

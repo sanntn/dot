@@ -65,19 +65,20 @@ const projectFields = z.object({
   claudeToken: optionalText,
 });
 
-// A GitHub repository as "owner/name".
-export const GithubRepoSchema = z.string().trim().regex(/^[\w.-]+\/[\w.-]+$/, "Use the form owner/name");
+// A hosted repository as "owner/name" (a Bitbucket workspace and repo slug work the same way).
+export const CloneRepoSchema = z.string().trim().regex(/^[\w.-]+\/[\w.-]+$/, "Use the form owner/name");
 
-// A new project points at a folder (repoPath) or names a GitHub repository for Dot to clone (githubRepo).
+// A new project points at a folder (repoPath) or names a repository for Dot to clone (cloneRepo),
+// on the host in repoHost (GitHub when left out).
 export const ProjectInputSchema = projectFields
   .extend({
     repoPath: projectFields.shape.repoPath.optional(),
-    githubRepo: GithubRepoSchema.optional(),
+    cloneRepo: CloneRepoSchema.optional(),
     baseBranch: projectFields.shape.baseBranch.default("main"),
     browserTesting: z.boolean().default(false),
   })
-  .refine((p) => Boolean(p.repoPath) !== Boolean(p.githubRepo), {
-    message: "Give either a repo path or a GitHub repository",
+  .refine((p) => Boolean(p.repoPath) !== Boolean(p.cloneRepo), {
+    message: "Give either a repo path or a repository to clone",
     path: ["repoPath"],
   });
 export type ProjectInput = z.input<typeof ProjectInputSchema>;

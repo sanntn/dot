@@ -78,14 +78,15 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 |---|---|---|
 | `DOT_PASSWORD` | yes | The login password. Dot refuses to start on a network address without it. |
 | `DOT_ALLOWED_HOSTS` | yes | The domain you gave Coolify, such as `dot.example.com`. Requests to any other host name are rejected. Separate several with commas. |
-| `DOT_GITHUB_TOKEN` | yes | Fine-grained token with the permissions listed under GitHub above. Dot also uses it to clone and push. |
+| `DOT_GITHUB_TOKEN` | for GitHub projects | Fine-grained token with the permissions listed under GitHub above. Dot also uses it to clone and push. |
+| `DOT_BITBUCKET_TOKEN`, `DOT_BITBUCKET_EMAIL` | for Bitbucket projects | As under Bitbucket above. Cloning and pushing also need read and write access to repository contents. An Atlassian API token needs the `read:repository:bitbucket` and `write:repository:bitbucket` scopes. |
 | `DOT_CLAUDE_TOKEN` | yes | Run `claude setup-token` on your own machine and paste the result. Agents run on your subscription with it. This is the default account. |
 | `DOT_CLAUDE_TOKEN_<NAME>` | no | One more account. Run `claude setup-token` while signed in to that account and add it as, say, `DOT_CLAUDE_TOKEN_WORK`. Names are upper case letters, digits and underscores. |
 | `DOT_SESSION_SECRET` | no | Signs the login cookie. Defaults to a value derived from the password. |
 | `DOT_GIT_NAME`, `DOT_GIT_EMAIL` | no | The identity on the executor's commits. Defaults to `Dot` and `dot@localhost`. |
 | `DOT_MAX_AGENTS` and the others above | no | Work the same as locally. |
 
-5. Deploy, open the domain and sign in. In New project, pick a GitHub repository from the list. Dot clones it into `/data/dot/repos`.
+5. Deploy, open the domain and sign in. In New project, pick the host and the repository. GitHub shows a list of the repos the token can reach. For Bitbucket, type `workspace/repo-slug`. Dot clones it into `/data/dot/repos`.
 
 Notes:
 

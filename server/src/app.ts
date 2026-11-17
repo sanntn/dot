@@ -9,6 +9,7 @@ import {
   MAX_IMAGE_BYTES,
   MergeSchema,
   PlanUpdateSchema,
+  REPO_HOST_LABELS,
   ProjectInputSchema,
   ProjectPatchSchema,
   SendBackSchema,
@@ -172,26 +173,28 @@ export function createApp(
   app.get("/projects", (c) => c.json(store.listProjects()));
 
   app.post("/projects", async (c) => {
-    const { githubRepo, ...data } = await parseBody(c, ProjectInputSchema);
+    const { cloneRepo: toClone, ...data } = await parseBody(c, ProjectInputSchema);
     let repoPath: string;
     let { baseBranch, repoHost, repoOwner, repoName } = data;
-    if (githubRepo) {
+    if (toClone) {
       // Dot clones it into its own repos folder, once. Later tasks fetch from origin as usual.
-      const [owner, name] = githubRepo.split("/") as [string, string];
-      repoPath = join(options.reposDir, `${owner}__${name}`);
+      const host = repoHost ?? "github";
+      const [owner, name] = toClone.split("/") as [string, string];
+      repoPath = join(options.reposDir, `${host}__${owner}__${name}`);
       if (!existsSync(join(repoPath, ".git"))) {
+        const domain = host === "bitbucket" ? "bitbucket.org" : "github.com";
+        const needs =
+          host === "bitbucket"
+            ? "DOT_BITBUCKET_TOKEN (and DOT_BITBUCKET_EMAIL for an Atlassian API token) with read access to the repository"
+            : "DOT_GITHUB_TOKEN with Contents access to the repository";
         try {
-          const checkedOut = await cloneRepo(`https://github.com/${owner}/${name}.git`, repoPath);
+          const checkedOut = await cloneRepo(`https://${domain}/${owner}/${name}.git`, repoPath);
           if (!(await branchExistsLocally(repoPath, baseBranch)) && checkedOut) baseBranch = checkedOut;
         } catch (err) {
-          throw new HttpError(
-            502,
-            `Could not clone ${githubRepo}: ${gitError(err)}
-A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
-          );
+          throw new HttpError(502, `Could not clone ${toClone} from ${REPO_HOST_LABELS[host]}: ${gitError(err)}\nA deployed Dot needs ${needs}.`);
         }
       }
-      repoHost ??= "github";
+      repoHost = host;
       repoOwner ??= owner;
       repoName ??= name;
     } else {
@@ -235,10 +238,13 @@ A deployed Dot needs DOT_GITHUB_TOKEN with Contents access to the repository.`,
 
   // Repositories the GitHub token can push to, for the new-project picker. Empty without a token.
   app.get("/github/repos", async (c) => {
+    // Bitbucket can't list repositories across workspaces with the tokens Dot uses, so it only reports
+    // whether a token is set. You type its workspace/repo.
+    const bitbucket = Boolean(process.env.DOT_BITBUCKET_TOKEN?.trim());
     const api = GitHub.fromEnv();
-    if (!api) return c.json({ configured: false, repos: [] });
+    if (!api) return c.json({ configured: false, bitbucket, repos: [] });
     try {
-      return c.json({ configured: true, repos: await api.listRepos() });
+      return c.json({ configured: true, bitbucket, repos: await api.listRepos() });
     } catch (err) {
       throw new HttpError(502, err instanceof Error ? err.message : String(err));
     }

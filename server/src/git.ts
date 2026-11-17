@@ -21,8 +21,8 @@ mkdirSync(NO_HOOKS, { recursive: true });
 // Network calls also get a time limit and never prompt in a terminal nobody sees.
 //
 // A deployed Dot (DOT_GIT_USE_TOKEN=true) has no git login of its own, so network calls to github.com
-// authenticate with DOT_GITHUB_TOKEN. The token goes to that one git process through a credential helper,
-// and never into a config file or an agent's environment.
+// and bitbucket.org authenticate with DOT_GITHUB_TOKEN and DOT_BITBUCKET_TOKEN. Each token goes to that one
+// git process through a credential helper, and never into a config file or an agent's environment.
 export async function git(
   cwd: string,
   args: string[],
@@ -31,12 +31,23 @@ export async function git(
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DOT_")));
   if (options.network) {
     env.GIT_TERMINAL_PROMPT = "0";
-    const token = process.env.DOT_GITHUB_TOKEN?.trim();
-    if (token && process.env.DOT_GIT_USE_TOKEN === "true") {
-      env.GIT_CONFIG_COUNT = "1";
-      env.GIT_CONFIG_KEY_0 = "credential.https://github.com.helper";
-      env.GIT_CONFIG_VALUE_0 = '!f() { echo username=x-access-token; echo "password=$DOT_GIT_PASSWORD"; }; f';
-      env.DOT_GIT_PASSWORD = token;
+    if (process.env.DOT_GIT_USE_TOKEN === "true") {
+      const helpers: { url: string; username: string; password: string }[] = [];
+      const github = process.env.DOT_GITHUB_TOKEN?.trim();
+      if (github) helpers.push({ url: "https://github.com", username: "x-access-token", password: github });
+      const bitbucket = process.env.DOT_BITBUCKET_TOKEN?.trim();
+      if (bitbucket) {
+        // Bitbucket wants a fixed user name for git, and which one depends on the kind of token.
+        // An Atlassian API token comes with an email (DOT_BITBUCKET_EMAIL). Access tokens do not.
+        const username = process.env.DOT_BITBUCKET_EMAIL?.trim() ? "x-bitbucket-api-token-auth" : "x-token-auth";
+        helpers.push({ url: "https://bitbucket.org", username, password: bitbucket });
+      }
+      env.GIT_CONFIG_COUNT = String(helpers.length);
+      helpers.forEach((h, i) => {
+        env[`GIT_CONFIG_KEY_${i}`] = `credential.${h.url}.helper`;
+        env[`GIT_CONFIG_VALUE_${i}`] = `!f() { echo username=${h.username}; echo "password=$DOT_GIT_PASSWORD_${i}"; }; f`;
+        env[`DOT_GIT_PASSWORD_${i}`] = h.password;
+      });
     }
   }
   const { stdout } = await run(
