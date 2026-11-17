@@ -516,7 +516,10 @@ function ClaudeAccountField(props: {
           <span className="text-destructive">{error}</span>
         ) : account?.loggedIn ? (
           <span>
-            Logged in as <span className="font-medium">{account.email ?? "an unknown account"}</span>
+            Logged in as{" "}
+            <span className="font-medium">
+              {account.email ?? (token !== "default" ? `the ${token} token` : "an account with no email on record")}
+            </span>
             {account.orgName || account.subscriptionType
               ? ` (${[account.orgName, account.subscriptionType && `${account.subscriptionType} plan`].filter(Boolean).join(", ")})`
               : ""}
