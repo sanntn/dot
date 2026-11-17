@@ -30,6 +30,7 @@ import { GitHub } from "./github.ts";
 import { detectRemote, parseRemoteUrl } from "./githost.ts";
 import type { Orchestrator } from "./orchestrator.ts";
 import type { Store } from "./store.ts";
+import { claudeUsage } from "./usage.ts";
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/png": "png",
@@ -280,6 +281,12 @@ export function createApp(
     } catch (err) {
       throw new HttpError(502, `Could not ask the claude CLI: ${err instanceof Error ? err.message : String(err)}`);
     }
+  });
+
+  // How much of the subscription limits that account has used, for the limits widget.
+  app.post("/claude-usage", async (c) => {
+    const { configDir, token } = await parseBody(c, ClaudeAccountQuerySchema);
+    return c.json(await claudeUsage(checkConfigDir(configDir), checkTokenName(token)));
   });
 
   // Starts a Claude sign-in for a config folder and returns the link, which the web page opens in its own

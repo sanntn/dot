@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   ClaudeAccount,
   ClaudeTokens,
+  ClaudeUsage,
   ExecutionArtifact,
   Plan,
   PlanArtifact,
@@ -59,6 +60,8 @@ export const api = {
   deleteProject: (id: number) => request<void>(`/projects/${id}`, "DELETE"),
   claudeAccount: (configDir: string | null, token: string | null = null) =>
     request<ClaudeAccount>("/claude-account", "POST", { configDir, token }),
+  claudeUsage: (configDir: string | null, token: string | null = null) =>
+    request<ClaudeUsage>("/claude-usage", "POST", { configDir, token }),
   claudeTokens: () => request<ClaudeTokens>("/claude-tokens"),
   claudeLogin: (configDir: string) => request<{ url: string }>("/claude-login", "POST", { configDir }),
   claudeLoginStatus: (configDir: string) =>

@@ -11,6 +11,7 @@ import { applyMove } from "./move.ts";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { TaskDialog } from "./TaskDialog.tsx";
 import { TaskSheet } from "./TaskSheet.tsx";
+import { UsageLimits } from "./UsageLimits.tsx";
 
 type OpenDialog =
   | { kind: "new-task" }
@@ -186,6 +187,7 @@ export function App() {
         )}
 
         <span className="flex-1" />
+        <UsageLimits configDir={project?.claudeConfigDir ?? null} token={project?.claudeToken ?? null} />
         <Button variant="outline" onClick={() => setDialog({ kind: "new-project" })}>
           New project
         </Button>

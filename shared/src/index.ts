@@ -119,6 +119,26 @@ export type ClaudeAccount = {
   configDirectory: string | null;
 };
 
+// How much of each subscription limit is used, from Anthropic's usage endpoint. `percent` is 0 to 100.
+export type UsageLimit = {
+  id: string;
+  label: string;
+  group: "session" | "weekly";
+  percent: number;
+  severity: "normal" | "warning" | "critical";
+  resetsAt: string | null;
+};
+// Pay-as-you-go credits that cover you after a plan limit. Amounts are in minor units, such as cents.
+export type UsageSpend = {
+  usedMinor: number;
+  limitMinor: number | null;
+  currency: string;
+  exponent: number;
+  percent: number;
+  severity: "normal" | "warning" | "critical";
+};
+export type ClaudeUsage = { limits: UsageLimit[]; spend: UsageSpend | null; fetchedAt: string };
+
 // Stages that have an agent. Grows as the executor, reviewer and merge steps land.
 export const AGENT_STAGES = ["research", "execute", "review"] as const;
 export const AgentStageSchema = z.enum(AGENT_STAGES);
