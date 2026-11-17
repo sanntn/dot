@@ -1,0 +1,73 @@
+import type { Project, Task } from "@dot/shared";
+
+// Built-in tools the researcher has at all. Write, Edit and the rest are not even loaded.
+export const RESEARCHER_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
+
+// Read-only shell commands, with any arguments. Everything else is denied, since nobody answers
+// permission prompts. Only commands with no argument that writes files or runs programs belong here:
+// rg (--pre), git grep (-O) and tree (-o) are left out on purpose. Grep and Glob cover them.
+const READ_ONLY_COMMANDS = ["git log", "git show", "git diff", "git status", "git ls-files", "git blame", "git rev-parse", "ls", "wc"];
+
+// Commands allowed only exactly as written. "git branch" with arguments can create or delete branches.
+const EXACT_COMMANDS = ["pwd", "git branch", "git branch -a", "git branch -r", "git branch -v", "git branch --show-current"];
+
+export const RESEARCHER_ALLOWED_TOOLS = [
+  "Read",
+  "Glob",
+  "Grep",
+  "WebSearch",
+  "WebFetch",
+  ...READ_ONLY_COMMANDS.flatMap((cmd) => [`Bash(${cmd})`, `Bash(${cmd} *)`]),
+  ...EXACT_COMMANDS.map((cmd) => `Bash(${cmd})`),
+  "mcp__dot__ask_human",
+  "mcp__dot__submit_plan",
+];
+
+// Deny rules win over allow rules. git log, show and diff can write files with --output.
+export const RESEARCHER_DENIED_TOOLS = ["Bash(*--output*)"];
+
+export const RESEARCHER_SYSTEM_PROMPT = `
+You are the research agent in Dot, a kanban board where Claude agents carry a task from idea to merged code.
+Your stage comes first. After you, an executor agent implements your plan in a git worktree, a reviewer agent
+checks the result against your acceptance criteria, and a merge step opens a pull request on Bitbucket or GitHub.
+The user approves your plan before the executor starts.
+
+Your job is to understand the task well enough that the executor can do it without asking anyone.
+
+How to work:
+- Read the task, then investigate the repository: find the relevant code, conventions, tests and build setup.
+- You cannot edit files. Your shell is limited to read-only commands: git log, git show, git diff, git status,
+  git ls-files, git blame, git rev-parse, git branch (no arguments), ls, wc and pwd.
+  Run one command per Bash call. Chained commands (&&, ;, |) and anything else are denied.
+  Use the Grep and Glob tools to search, not shell commands.
+- When a decision belongs to the user (scope, product behavior, a trade-off you cannot settle from the code),
+  call ask_human. Ask one focused question at a time and offer choices when you can.
+  Then end your turn. The answer arrives as the next user message.
+- Do not ask about things you can find out from the repository.
+- When you know enough, call submit_plan. Acceptance criteria must be concrete and checkable.
+  List every decision you made without asking under assumptions, so the user can review them.
+- After submit_plan succeeds, end your turn with a short summary of the plan.
+
+The user may chat with you later, including after the plan is approved. Answer their questions.
+If they ask for changes while the plan is still under review, submit a revised plan with submit_plan.
+`.trim();
+
+export function researcherBrief(task: Task, project: Project): string {
+  const commands = [
+    project.testCommand && `test: ${project.testCommand}`,
+    project.lintCommand && `lint: ${project.lintCommand}`,
+    project.typecheckCommand && `typecheck: ${project.typecheckCommand}`,
+  ].filter(Boolean);
+
+  return [
+    `Task #${task.number}:${task.title}`,
+    "",
+    task.description.trim() || "(No description given.)",
+    "",
+    `Project: ${project.name}`,
+    `Repository: ${project.repoPath} (base branch ${project.baseBranch})`,
+    commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
+    "",
+    "Research this task and submit a plan with submit_plan. Use ask_human if something is unclear.",
+  ].join("\n");
+}

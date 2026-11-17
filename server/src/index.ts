@@ -1,0 +1,73 @@
+import { existsSync } from "node:fs";
+import { relative, resolve } from "node:path";
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
+import { Hono } from "hono";
+import { createApp } from "./app.ts";
+import { Auth } from "./auth.ts";
+import { openDb } from "./db.ts";
+import { EventBus } from "./events.ts";
+import { Orchestrator } from "./orchestrator.ts";
+import { Store } from "./store.ts";
+
+const root = resolve(import.meta.dirname, "../..");
+try {
+  process.loadEnvFile(resolve(root, ".env"));
+} catch {
+  // No .env file. Defaults apply.
+}
+
+const port = Number(process.env.DOT_PORT ?? 4317);
+const dataDir = resolve(process.env.DOT_DATA_DIR ?? resolve(root, "data"));
+const host = process.env.DOT_HOST?.trim() || "127.0.0.1";
+const auth = new Auth(process.env.DOT_PASSWORD || null, process.env.DOT_SESSION_SECRET || null);
+const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+if (!isLoopback && !auth.enabled) {
+  // Dot runs agents with shell access. Never serve it to a network without a login.
+  console.error(`DOT_HOST=${host} exposes Dot to the network, so DOT_PASSWORD must be set. Refusing to start.`);
+  process.exit(1);
+}
+const dbFile = process.env.DOT_DB ?? resolve(dataDir, "dot.db");
+
+const store = new Store(openDb(dbFile));
+const bus = new EventBus();
+const orchestrator = new Orchestrator(store, bus, {
+  port,
+  maxAgents: Math.max(1, Number(process.env.DOT_MAX_AGENTS ?? 2)),
+  model: process.env.DOT_MODEL ?? "opus",
+  // Outside any repo, so worktrees never show up as untracked files in your checkout.
+  worktreesDir: resolve(dataDir, "worktrees"),
+});
+orchestrator.recover();
+
+// Don't leave claude processes running when Dot stops or restarts.
+process.on("exit", () => orchestrator.shutdown());
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(signal, () => process.exit(0));
+}
+
+const api = createApp(store, bus, orchestrator, {
+  attachmentsDir: resolve(dataDir, "attachments"),
+  reposDir: resolve(dataDir, "repos"),
+  auth,
+  allowedHosts: (process.env.DOT_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean),
+});
+
+// In a deployed Dot the server also serves the built board. In development Vite does that.
+const app = new Hono();
+app.route("/", api);
+const webDir = resolve(process.env.DOT_WEB_DIR ?? resolve(root, "web/dist"));
+if (existsSync(resolve(webDir, "index.html"))) {
+  const rel = relative(process.cwd(), webDir).replaceAll("\\", "/") || ".";
+  app.use("*", serveStatic({ root: rel }));
+  // Unknown paths outside the API get the board, so a reload on any URL works.
+  app.get("*", (c, next) => (c.req.path.startsWith("/api/") ? next() : serveStatic({ root: rel, path: "index.html" })(c, next)));
+}
+
+// Loopback by default. Dot runs agents with shell access, so a network address needs DOT_PASSWORD (checked above).
+serve({ fetch: app.fetch, port, hostname: host }, (info) => {
+  console.log(`Dot server on http://${host}:${info.port} (db: ${dbFile}${auth.enabled ? ", password login on" : ""})`);
+});

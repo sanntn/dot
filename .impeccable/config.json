@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "web/src/styles.css"
+        ],
+        "createdAt": "2026-11-17T15:12:42.117Z",
+        "reason": "Claude triage: L194 is the Markdown blockquote rule in .prose-dot, a neutral grey quote bar, not a colored card accent"
+      }
+    ]
+  }
+}

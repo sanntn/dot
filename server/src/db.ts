@@ -1,0 +1,157 @@
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
+// Each entry runs once, in order. PRAGMA user_version tracks how many have run.
+// Never edit an entry that has shipped. Add a new one instead.
+const MIGRATIONS: string[] = [
+  `
+  CREATE TABLE projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    base_branch TEXT NOT NULL DEFAULT 'main',
+    bitbucket_workspace TEXT,
+    bitbucket_repo TEXT,
+    test_command TEXT,
+    lint_command TEXT,
+    typecheck_command TEXT,
+    browser_testing INTEGER NOT NULL DEFAULT 0,
+    dev_command TEXT,
+    dev_url TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    column_key TEXT NOT NULL DEFAULT 'inbox',
+    position REAL NOT NULL,
+    needs_input INTEGER NOT NULL DEFAULT 0,
+    branch TEXT,
+    worktree_path TEXT,
+    review_round INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX tasks_board ON tasks(project_id, column_key, position);
+  `,
+  `
+  ALTER TABLE tasks ADD COLUMN agent_state TEXT NOT NULL DEFAULT 'idle';
+
+  CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    stage TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
+    cost_usd REAL NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX runs_task ON runs(task_id, stage);
+
+  CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    data TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX messages_task ON messages(task_id, id);
+
+  CREATE TABLE artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    type TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX artifacts_task ON artifacts(task_id, type, version);
+
+  CREATE TABLE attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  `,
+  `
+  -- Set once the CLI reports the session started, so Dot knows to resume it instead of creating it.
+  ALTER TABLE runs ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0;
+  UPDATE runs SET session_started = 1
+    WHERE EXISTS (SELECT 1 FROM messages m WHERE m.run_id = runs.id AND m.role IN ('agent', 'tool'));
+  `,
+  `
+  -- The task's Bitbucket pull request, once the merge step opens it.
+  ALTER TABLE tasks ADD COLUMN pr_id INTEGER;
+  ALTER TABLE tasks ADD COLUMN pr_url TEXT;
+  `,
+  `
+  -- A project can use its own Claude login. Each run remembers the config folder its session lives in.
+  ALTER TABLE projects ADD COLUMN claude_config_dir TEXT;
+  ALTER TABLE runs ADD COLUMN claude_config_dir TEXT;
+  `,
+  `
+  -- Projects can live on Bitbucket or GitHub. NULL fields fall back to the origin remote.
+  ALTER TABLE projects RENAME COLUMN bitbucket_workspace TO repo_owner;
+  ALTER TABLE projects RENAME COLUMN bitbucket_repo TO repo_name;
+  ALTER TABLE projects ADD COLUMN repo_host TEXT;
+  `,
+  `
+  -- Card numbers count up per project. tasks.id stays the global key. The counter never
+  -- goes back, so deleting the newest card does not hand its number to the next one.
+  ALTER TABLE tasks ADD COLUMN number INTEGER NOT NULL DEFAULT 0;
+  UPDATE tasks SET number = (
+    SELECT COUNT(*) FROM tasks t WHERE t.project_id = tasks.project_id AND t.id <= tasks.id
+  );
+  ALTER TABLE projects ADD COLUMN next_task_number INTEGER NOT NULL DEFAULT 1;
+  UPDATE projects SET next_task_number = (
+    SELECT COALESCE(MAX(number), 0) + 1 FROM tasks WHERE tasks.project_id = projects.id
+  );
+  CREATE UNIQUE INDEX tasks_project_number ON tasks(project_id, number);
+  `,
+];
+
+export type Db = DatabaseSync;
+
+export function openDb(file: string): Db {
+  if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+
+  const row = db.prepare("PRAGMA user_version").get() as { user_version: number };
+  for (let version = row.user_version; version < MIGRATIONS.length; version++) {
+    transaction(db, () => {
+      db.exec(MIGRATIONS[version]!);
+      db.exec(`PRAGMA user_version = ${version + 1}`);
+    });
+  }
+  return db;
+}
+
+export function transaction<T>(db: Db, fn: () => T): T {
+  db.exec("BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
