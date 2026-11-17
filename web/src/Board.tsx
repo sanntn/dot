@@ -56,6 +56,8 @@ export function Board(props: {
   const drag = useRef<DragState | null>(null);
   const [drop, setDrop] = useState<TaskMove | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
+  // Where the dragged card started. It is pinned there with position: fixed so the column's overflow can't clip it.
+  const [dragRect, setDragRect] = useState<DOMRect | null>(null);
   const hintId = useId();
 
   // After a move, animate the card from where it was (FLIP) and, for keyboard moves, keep focus on its handle.
@@ -215,6 +217,7 @@ export function Board(props: {
       lastTime: null,
     };
     document.documentElement.classList.add("is-dragging");
+    setDragRect(card.getBoundingClientRect());
     setDraggingId(task.id);
   }
 
@@ -303,6 +306,7 @@ export function Board(props: {
                   task={task}
                   showMarker={markerBefore === task.id}
                   dragging={draggingId === task.id}
+                  dragRect={draggingId === task.id ? dragRect : null}
                   hintId={hintId}
                   onOpen={() => props.onOpenTask(task)}
                   onPointerDown={(e) => onPointerDown(e, task)}
@@ -325,6 +329,7 @@ function TaskCardSlot(props: {
   task: Task;
   showMarker: boolean;
   dragging: boolean;
+  dragRect: DOMRect | null;
   hintId: string;
   onOpen: () => void;
   onPointerDown: (e: PointerEvent<HTMLButtonElement>) => void;
@@ -337,9 +342,21 @@ function TaskCardSlot(props: {
   return (
     <>
       {props.showMarker && <DropMarker />}
+      {props.dragRect && <li aria-hidden="true" style={{ height: props.dragRect.height }} />}
       <li
         data-task-id={task.id}
         data-dragging={props.dragging || undefined}
+        style={
+          props.dragRect
+            ? {
+                position: "fixed",
+                left: props.dragRect.left,
+                top: props.dragRect.top,
+                width: props.dragRect.width,
+                height: props.dragRect.height,
+              }
+            : undefined
+        }
         className={cn(
           "relative grid scroll-m-3 grid-cols-[auto_minmax(0,1fr)] rounded-lg border bg-card text-card-foreground shadow-xs",
           "has-[.card-handle:focus-visible]:ring-3 has-[.card-handle:focus-visible]:ring-ring/50",
