@@ -167,13 +167,15 @@ test("a task goes from the inbox to merge approval through three agents", async 
   assert.ok(runs.every((r) => r.costUsd > 0));
 });
 
-test("ask_human flags the task and the answer resumes the same session", async () => {
+test("ask_human flags the task, and the answer resumes the session", async () => {
   const h = await harness([
-    { turns: [[{ tool: "ask_human", args: { question: "Which greeting?", choices: ["hello", "hi"] } }], [{ tool: "submit_plan", args: plan }]] },
+    { turns: [[{ tool: "ask_human", args: { question: "Which greeting?", choices: ["hello", "hi"] } }]] },
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
   ]);
 
   h.orchestrator.startResearch(h.task.id);
-  const waiting = await h.until("a question", (t) => t.needsInput);
+  // Wait for the process to finish its turn and exit, as it does while a question waits for you.
+  const waiting = await h.until("a question", (t) => t.needsInput && t.agentState !== "running");
   assert.equal(waiting.column, "research");
   const question = h.store.listMessages(h.task.id).find((m) => m.kind === "question");
   assert.equal(question?.text, "Which greeting?");
@@ -181,10 +183,11 @@ test("ask_human flags the task and the answer resumes the same session", async (
   h.orchestrator.sendMessage(h.task.id, { stage: "research", text: "hello", attachmentIds: [] });
   const planned = await h.until("plan review", (t) => t.column === "plan_review");
   assert.equal(planned.needsInput, false);
-  // Both turns went to one process, so the fake saw one launch with two prompts.
+  // The answer started a second process in the same session, with the answer as its first message.
   const prompts = h.calls().filter((c) => "prompt" in c);
   assert.equal(prompts.length, 2);
   assert.equal(prompts[1]!.prompt, "hello");
+  assert.equal(prompts[1]!.resume, true);
 });
 
 test("a stage that ends without submitting is nudged once, then flagged", async () => {

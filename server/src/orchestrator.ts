@@ -2,10 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ExecutionReportSchema,
   MAX_REVIEW_ROUNDS,
-  PlanSchema,
-  ReviewSchema,
   STAGE_LABELS,
   type AgentStage,
   type ChatMessage,
@@ -14,7 +11,6 @@ import {
   type Run,
   type Task,
 } from "@dot/shared";
-import { z } from "zod";
 import { ClaudeProcess, claudeTokenFor, describeToolUse, type ContentBlock, type StreamEvent } from "./agents/claude.ts";
 import {
   RESEARCHER_ALLOWED_TOOLS,
@@ -41,27 +37,22 @@ import {
 } from "./agents/reviewer.ts";
 import { HttpError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
-import type { BuildStatus } from "./bitbucket.ts";
-import { repoHostFor, trustedOrigin, type RepoHostClient } from "./githost.ts";
+import { trustedOrigin } from "./githost.ts";
 import {
   branchSlug,
-  commitsAhead,
-  deleteBranch,
   fetchBase,
-  mergeConflicts,
   resolveBaseRef,
-  pushBranch,
-  remoteUrl,
   gitError,
   prepareWorktree,
   refChanges,
   removeWorktree,
   snapshotRefs,
-  uncommittedChanges,
   type RefSnapshot,
   type Workspace,
 } from "./git.ts";
-import { defineTool, handleMcp, type McpTool } from "./mcp.ts";
+import { agentTools } from "./agentTools.ts";
+import { MergeStep } from "./merge.ts";
+import { handleMcp, type McpTool } from "./mcp.ts";
 import type { Attachment, Store } from "./store.ts";
 
 export type OrchestratorConfig = {
@@ -155,14 +146,25 @@ export class Orchestrator {
   private readonly live = new Map<number, Live>();
   private readonly tokens = new Map<string, number>();
   private readonly queue: number[] = [];
+  private readonly mergeStep: MergeStep;
 
   constructor(
     private readonly store: Store,
     private readonly bus: EventBus,
     private readonly config: OrchestratorConfig,
-  ) {}
+  ) {
+    this.mergeStep = new MergeStep(store, {
+      publish: (taskId) => this.publish(taskId),
+      stop: (taskId) => this.stop(taskId),
+      resumeExecutor: (runId, prompt) => this.dispatch(runId, [{ type: "text", text: prompt }], true),
+    });
+  }
 
   // Public actions
+
+  startMerge(taskId: number, options: { skipCi: boolean }): Promise<Task> {
+    return this.mergeStep.start(taskId, options);
+  }
 
   startResearch(taskId: number): Task {
     const task = this.store.getTask(taskId);
@@ -380,7 +382,7 @@ export class Orchestrator {
     if (task.column !== "review" && task.column !== "merge_approval" && task.column !== "merge") {
       throw new HttpError(409, "Changes can only be requested in Review, Merge approval or Merge");
     }
-    if (this.merging.has(taskId)) throw new HttpError(409, "Stop the merge before requesting changes");
+    if (this.mergeStep.isRunning(taskId)) throw new HttpError(409, "Stop the merge before requesting changes");
     const run = this.store.latestRun(taskId, "execute");
     if (!run) throw new HttpError(409, "This task has no executor");
     await this.stop(taskId);
@@ -395,280 +397,6 @@ export class Orchestrator {
     return this.store.getTask(taskId);
   }
 
-  // Merge step. Plain code, no agent: conflict check, push, pull request, wait for CI,
-  // squash merge, clean up. Every step can safely run again, so Retry and restart recovery
-  // just run the whole job from the top.
-
-  private readonly merging = new Map<number, AbortController>();
-
-  async startMerge(taskId: number, options: { skipCi: boolean }): Promise<Task> {
-    const task = this.store.getTask(taskId);
-    if (task.column !== "merge_approval" && task.column !== "merge") {
-      throw new HttpError(409, "Only a task in Merge approval can be merged");
-    }
-    if (this.merging.has(taskId)) throw new HttpError(409, "The merge is already running");
-    // Fails early with what to set when the host, repo or token is missing.
-    await repoHostFor(this.store.getProject(task.projectId));
-    if (!task.branch) throw new HttpError(409, "This task has no branch to merge");
-
-    // A chat with a past-stage agent may still be running in the worktree the merge removes at the end.
-    this.merging.set(taskId, new AbortController());
-    try {
-      await this.stop(taskId);
-    } finally {
-      this.merging.delete(taskId);
-    }
-
-    if (task.column === "merge_approval") {
-      this.store.moveTask(taskId, { column: "merge", beforeTaskId: null });
-      this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "You approved the merge." });
-    }
-    this.store.setNeedsInput(taskId, false);
-    this.store.setAgentState(taskId, "running");
-    this.publish(taskId);
-    void this.runMerge(taskId, options.skipCi);
-    return this.store.getTask(taskId);
-  }
-
-  private async runMerge(taskId: number, skipCi: boolean): Promise<void> {
-    const abort = new AbortController();
-    this.merging.set(taskId, abort);
-    const say = (text: string, kind: "status" | "error" = "status") => {
-      this.store.addMessage({ taskId, runId: null, role: "system", kind, text });
-      this.publish(taskId);
-    };
-    const stillMerging = () => {
-      if (abort.signal.aborted) throw new Error("aborted");
-    };
-
-    try {
-      const task = this.store.getTask(taskId);
-      const project = this.store.getProject(task.projectId);
-      const remote = await repoHostFor(project);
-      const branch = task.branch!;
-      const repo = project.repoPath;
-      const base = project.baseBranch;
-
-      // 0. Already merged? Happens when Dot restarted after the host merged but before cleanup.
-      //    Pushing or opening a pull request again would recreate the closed branch.
-      const knownPr = task.prId ? await remote.getPullRequest(task.prId) : null;
-      if (knownPr?.state === "MERGED") {
-        say(`Pull request #${knownPr.id} is already merged. Finishing up.`);
-        await this.finishMerge(taskId, knownPr.id);
-        return;
-      }
-
-      // 1. Would the branch still merge cleanly into origin's current base?
-      const fetched = await fetchBase(repo, base, trustedOrigin(project));
-      if (fetched.note) say(fetched.note);
-      const conflicts = await mergeConflicts(repo, fetched.ref, branch);
-      stillMerging();
-      if (conflicts.length > 0) {
-        const files = conflicts.map((f) => `- ${f}`).join("\n");
-        this.sendToExecutor(
-          taskId,
-          `The base branch ${base} has moved on and now conflicts with your branch in these files:\n\n${files}\n\n` +
-            `Merge it into your branch (git merge ${fetched.ref}), resolve the conflicts, rerun the project's checks, ` +
-            "commit, and call submit_execution_report. The work goes through review again before it can merge.",
-          `${base} now conflicts with ${branch} in ${conflicts.length} file${conflicts.length === 1 ? "" : "s"}, so the task went back to the executor to merge ${base} in.`,
-        );
-        return;
-      }
-
-      // 2. Push with your git credentials.
-      const origin = await remoteUrl(repo);
-      if (!origin) throw new Error(`The repository has no "origin" remote to push to.`);
-      const fullName = `${remote.owner}/${remote.name}`;
-      const originNote = `Note: origin is ${origin}, which doesn't look like ${remote.label} repo ${fullName} from the project settings.`;
-      if (!origin.toLowerCase().includes(fullName.toLowerCase()) && !this.store.listMessages(taskId).some((m) => m.text === originNote)) {
-        say(originNote);
-      }
-      say(`Pushing ${branch} to origin.`);
-      // The commit that was pushed, so the build wait and the merge refer to exactly that commit.
-      const head = await pushBranch(repo, branch, { origin: trustedOrigin(project), base });
-      stillMerging();
-
-      // 3. Reuse the task's pull request while it is open, otherwise find or open one.
-      let pr = knownPr?.state === "OPEN" ? knownPr : null;
-      pr ??= await remote.findOpenPullRequest(branch);
-      if (!pr) {
-        pr = await remote.createPullRequest({
-          title: task.title,
-          description: this.pullRequestDescription(taskId),
-          source: branch,
-          destination: base,
-        });
-        say(`Opened pull request #${pr.id}: ${pr.url}`);
-      }
-      this.store.setPullRequest(taskId, pr.id, pr.url || null);
-      this.publish(taskId);
-      stillMerging();
-
-      // 4. Wait for CI.
-      if (!skipCi) {
-        // A repository without CI never reports a build, so waiting the full no-CI time only
-        // delays the merge. When the host's own CI isn't set up (no Pipelines or Actions config
-        // on the branch, and none in the repository), Dot waits briefly in case another CI
-        // service reports, then merges.
-        const noPipelines = await remote.hasNoCi(repo, head);
-        stillMerging();
-        say(
-          noPipelines
-            ? `This repository has no ${remote.ciName}. Checking briefly whether any other CI reports a build for ${head.slice(0, 12)}.`
-            : `Waiting for the build of ${head.slice(0, 12)}.`,
-        );
-        const outcome = await this.waitForBuilds(remote, head, abort.signal, noPipelines);
-        if (outcome.kind === "none" && noPipelines) {
-          say("No CI reported a build, so there is nothing to wait for.");
-        } else if (outcome.kind === "none") {
-          this.store.setNeedsInput(taskId, true);
-          this.store.setAgentState(taskId, "waiting");
-          say(
-            "No build status showed up for this commit. If the repository has no CI, use Merge without CI. " +
-              `Otherwise check ${remote.label} and press Retry merge.`,
-          );
-          return;
-        } else if (outcome.kind === "failed") {
-          const log = await remote.failedBuildLog(head);
-          const failures = outcome.statuses.map((s) => `- ${s.name || s.key}: ${s.state} ${s.url}`).join("\n");
-          this.sendToExecutor(
-            taskId,
-            `The ${remote.label} build failed for your branch:\n\n${failures}` +
-              (log ? `\n\nWhat the failed build reported:\n\n${log}` : "") +
-              "\n\nFix the cause, commit, and call submit_execution_report. The work goes through review again before it can merge.",
-            `The build failed, so the task went back to the executor.\n\n${failures}`,
-          );
-          return;
-        } else {
-          say("The build passed.");
-        }
-      }
-      stillMerging();
-
-      // 5. Squash merge.
-      say(`Merging pull request #${pr.id} (squash).`);
-      await remote.squashMerge(pr.id, this.squashMessage(taskId), branch);
-
-      // 6. Done.
-      await this.finishMerge(taskId, pr.id);
-    } catch (err) {
-      if (abort.signal.aborted) {
-        say("Merge stopped.");
-        this.store.setAgentState(taskId, "idle");
-        return;
-      }
-      this.store.setNeedsInput(taskId, true);
-      this.store.setAgentState(taskId, "failed");
-      say(`The merge stopped: ${err instanceof Error ? err.message : gitError(err)}`, "error");
-    } finally {
-      this.merging.delete(taskId);
-      this.publish(taskId);
-    }
-  }
-
-  // The pull request is merged: move the task to Done and remove the worktree, the local branch
-  // and its remote-tracking ref. The merge removed the branch on the host.
-  private async finishMerge(taskId: number, prId: number): Promise<void> {
-    const task = this.store.getTask(taskId);
-    const project = this.store.getProject(task.projectId);
-    this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
-    this.store.setAgentState(taskId, "idle");
-    this.store.addMessage({
-      taskId,
-      runId: null,
-      role: "system",
-      kind: "status",
-      text: `Merged pull request #${prId} into ${project.baseBranch}.`,
-    });
-    this.publish(taskId);
-    if (task.worktreePath) await removeWorktree(project.repoPath, task.worktreePath);
-    if (task.branch) {
-      await deleteBranch(project.repoPath, task.branch);
-      this.store.setTaskWorkspace(taskId, task.branch, null);
-    }
-  }
-
-  // Polls the commit's build statuses. "none" when no status shows up at all for a while,
-  // which usually means the repository has no CI.
-  private async waitForBuilds(
-    remote: RepoHostClient,
-    commit: string,
-    signal: AbortSignal,
-    noPipelines: boolean,
-  ): Promise<{ kind: "passed" } | { kind: "none" } | { kind: "failed"; statuses: BuildStatus[] }> {
-    const pollMs = Number(process.env.DOT_MERGE_POLL_MS ?? 15_000);
-    const configuredNoneAfterMs = Number(process.env.DOT_MERGE_NO_CI_MS ?? 5 * 60_000);
-    const noneAfterMs = noPipelines ? Math.min(configuredNoneAfterMs, 30_000) : configuredNoneAfterMs;
-    const giveUpMs = 60 * 60_000;
-    const started = Date.now();
-    for (;;) {
-      if (signal.aborted) throw new Error("aborted");
-      const statuses = await remote.buildStatuses(commit);
-      const elapsed = Date.now() - started;
-      // Only these states are final. Anything else, including a state Dot doesn't know, means
-      // keep waiting: merging must never happen on a guess.
-      const finished = (s: BuildStatus) => s.state === "SUCCESSFUL" || s.state === "FAILED" || s.state === "STOPPED";
-      if (statuses.length === 0) {
-        if (elapsed > noneAfterMs) return { kind: "none" };
-      } else if (statuses.every(finished)) {
-        const failed = statuses.filter((s) => s.state !== "SUCCESSFUL");
-        return failed.length > 0 ? { kind: "failed", statuses: failed } : { kind: "passed" };
-      }
-      if (elapsed > giveUpMs) throw new Error("The build didn't finish within an hour.");
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, pollMs);
-        signal.addEventListener("abort", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-    }
-  }
-
-  // Sends merge-time problems (conflicts, a red build) back to the executor as a new fix cycle.
-  private sendToExecutor(taskId: number, prompt: string, note: string): void {
-    const run = this.store.latestRun(taskId, "execute");
-    this.store.addMessage({ taskId, runId: null, role: "system", kind: "error", text: note });
-    if (!run) {
-      this.store.setNeedsInput(taskId, true);
-      this.store.setAgentState(taskId, "failed");
-      this.publish(taskId);
-      return;
-    }
-    this.store.moveTask(taskId, { column: "execute", beforeTaskId: null });
-    this.store.setReviewRound(taskId, 0);
-    this.store.setAgentState(taskId, "idle");
-    this.dispatch(run.id, [{ type: "text", text: prompt }], true);
-    this.publish(taskId);
-  }
-
-  private pullRequestDescription(taskId: number): string {
-    const task = this.store.getTask(taskId);
-    const plan = this.store.latestPlan(taskId)?.plan;
-    const reports = this.store.listExecutionReports(taskId);
-    const review = this.store.latestReview(taskId);
-    const section = (title: string, body: string | undefined) => (body?.trim() ? `## ${title}\n\n${body.trim()}` : "");
-    // The first report describes the change. Later ones are fix rounds, listed after it.
-    const [first, ...later] = reports;
-    const changed = first
-      ? [first.report.summary, ...later.map((r) => `Fix round: ${r.report.summary}`)].join("\n\n")
-      : undefined;
-    return [
-      task.description.trim(),
-      section("Goal", plan?.goal),
-      section("Acceptance criteria", plan?.acceptanceCriteria.map((c) => `- ${c}`).join("\n")),
-      section("What changed", changed),
-      section("Review", review ? `${review.review.summary}\n\nApproved in review round ${review.version}.` : undefined),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
-  private squashMessage(taskId: number): string {
-    const task = this.store.getTask(taskId);
-    const goal = this.store.latestPlan(taskId)?.plan.goal;
-    return goal ? `${task.title}\n\n${goal}` : task.title;
-  }
 
   // Removes a task's worktree folder before the task is deleted. The branch stays in the repo.
   // Call after stop() has resolved: on Windows a running process keeps its folder locked.
@@ -707,7 +435,7 @@ export class Orchestrator {
   // Stops the task's agents. Resolves once their processes have exited, or after 5 seconds.
   async stop(taskId: number): Promise<void> {
     // A running merge stops at its next step. Host API calls already sent still finish.
-    this.merging.get(taskId)?.abort();
+    this.mergeStep.abort(taskId);
     const exits: Promise<void>[] = [];
     for (const live of this.live.values()) {
       if (live.taskId !== taskId) continue;
@@ -774,7 +502,7 @@ export class Orchestrator {
         kind: "status",
         text: "Dot restarted during the merge. Continuing.",
       });
-      void this.runMerge(task.id, false);
+      this.mergeStep.resume(task.id);
     }
 
     for (const task of this.store.listTasksInColumns(["review", "execute"])) {
@@ -813,199 +541,7 @@ export class Orchestrator {
   // Tools the agent calls back into Dot with
 
   private toolsFor(runId: number): McpTool[] {
-    const live = this.getLive(runId);
-    const run = this.store.getRun(runId);
-
-    const askHuman = defineTool({
-      name: "ask_human",
-      description:
-        "Ask the user a question when a decision is theirs to make. Then end your turn: the answer arrives as the next user message.",
-      schema: z.object({
-        question: z.string().trim().min(1).describe("One focused question."),
-        choices: z.array(z.string().trim().min(1)).max(6).optional().describe("Suggested answers, if any."),
-      }),
-      handler: ({ question, choices }) => {
-        this.store.addMessage({
-          taskId: run.taskId,
-          runId,
-          role: "agent",
-          kind: "question",
-          text: question,
-          data: choices && choices.length > 0 ? { choices } : null,
-        });
-        this.store.setNeedsInput(run.taskId, true);
-        live.outcome = true;
-        this.publish(run.taskId);
-        return { text: "Your question was sent to the user. End your turn now. Their answer arrives as the next user message." };
-      },
-    });
-
-    const submitPlan = defineTool({
-      name: "submit_plan",
-      description:
-        "Submit the implementation plan for the user to review. Each call saves a new version. Only works before the plan is approved.",
-      schema: PlanSchema,
-      handler: (plan) => {
-        const task = this.store.getTask(run.taskId);
-        if (task.column !== "research" && task.column !== "plan_review") {
-          return { text: "The plan is already approved and can no longer change.", isError: true };
-        }
-        const saved = this.store.addPlan(run.taskId, runId, "agent", plan);
-        this.store.addMessage({
-          taskId: run.taskId,
-          runId,
-          role: "agent",
-          kind: "plan",
-          text: `Submitted plan v${saved.version}.`,
-          data: { planVersion: saved.version },
-        });
-        if (task.column === "research") this.store.moveTask(task.id, { column: "plan_review", beforeTaskId: null });
-        live.outcome = true;
-        this.publish(run.taskId);
-        return {
-          text: `Plan saved as version ${saved.version} and sent to the user for review. End your turn now with a short summary of the plan.`,
-        };
-      },
-    });
-
-    const submitExecutionReport = defineTool({
-      name: "submit_execution_report",
-      description:
-        "Report that the plan is implemented and committed. Rejected while the worktree has uncommitted changes or the branch has no commits.",
-      schema: ExecutionReportSchema,
-      handler: async (report) => {
-        const task = this.store.getTask(run.taskId);
-        if (task.column !== "execute") {
-          return { text: "This task is no longer in the Execute column, so no report is needed.", isError: true };
-        }
-        if (!task.worktreePath) return { text: "This task has no worktree.", isError: true };
-        const project = this.store.getProject(task.projectId);
-
-        // Check git, not the agent's word: the work must be committed on the branch.
-        const dirty = await uncommittedChanges(task.worktreePath);
-        if (dirty) {
-          // Cap the listing: an unignored node_modules alone would flood the agent's context.
-          const lines = dirty.split("\n");
-          const shown = lines.slice(0, 30).join("\n");
-          const more = lines.length > 30 ? `\n...and ${lines.length - 30} more. Check .gitignore.` : "";
-          return {
-            text: `The worktree has uncommitted changes. Commit them (or remove them if they are not part of the work), then call submit_execution_report again.\n\n${shown}${more}`,
-            isError: true,
-          };
-        }
-        const commits = await commitsAhead(task.worktreePath, await resolveBaseRef(project.repoPath, project.baseBranch));
-        if (commits.length === 0) {
-          return { text: `The branch has no commits ahead of ${project.baseBranch}. Commit your work first.`, isError: true };
-        }
-
-        const saved = this.store.addExecutionReport(run.taskId, runId, report, commits);
-        this.store.addMessage({
-          taskId: run.taskId,
-          runId,
-          role: "agent",
-          kind: "report",
-          text: `Submitted the execution report (${commits.length} commit${commits.length === 1 ? "" : "s"}).`,
-          data: { reportVersion: saved.version },
-        });
-        this.store.moveTask(task.id, { column: "review", beforeTaskId: null });
-        live.outcome = true;
-        live.reviewOnExit = true;
-        this.publish(run.taskId);
-        return { text: "Report saved. The task moves to review. End your turn now with a short summary of what you built." };
-      },
-    });
-
-    const submitReview = defineTool({
-      name: "submit_review",
-      description:
-        "Submit your review of the executor's work. approve sends it to the user for merge approval; changes_requested sends the blocking issues back to the executor.",
-      schema: ReviewSchema,
-      handler: async (review) => {
-        const task = this.store.getTask(run.taskId);
-        if (task.column !== "review") {
-          return { text: "This task is no longer in Review, so no review is needed.", isError: true };
-        }
-        const plan = this.store.latestPlan(run.taskId);
-        const report = this.store.latestExecutionReport(run.taskId);
-        if (!plan || !report) return { text: "There is no plan or report to review.", isError: true };
-        const expected = plan.plan.acceptanceCriteria.length;
-        if (review.criteria.length < expected) {
-          return {
-            text: `The plan has ${expected} acceptance criteria and your review covers ${review.criteria.length}. Add an entry for each one.`,
-            isError: true,
-          };
-        }
-
-        const cycleRound = task.reviewRound + 1;
-        const saved = this.store.addReview(run.taskId, runId, cycleRound, report.version, review);
-        this.store.setReviewRound(run.taskId, cycleRound);
-        const round = saved.version;
-        const blocking = review.issues.filter((i) => i.severity === "blocking");
-        live.outcome = true;
-
-        // Running the project's checks can leave files behind (coverage reports, caches). Say so,
-        // or the executor's next report is rejected for changes it didn't make.
-        const leftovers = task.worktreePath ? await uncommittedChanges(task.worktreePath).catch(() => "") : "";
-        const leftoverNote = leftovers
-          ? `The review's checks left these files changed or untracked in the worktree:\n\n${leftovers.split("\n").slice(0, 30).join("\n")}`
-          : "";
-        if (leftoverNote) {
-          this.store.addMessage({ taskId: run.taskId, runId, role: "system", kind: "status", text: leftoverNote });
-        }
-
-        if (review.verdict === "approve") {
-          this.store.addMessage({
-            taskId: run.taskId,
-            runId,
-            role: "agent",
-            kind: "review",
-            text: `Approved in round ${round}.`,
-            data: { reviewVersion: saved.version },
-          });
-          this.store.moveTask(task.id, { column: "merge_approval", beforeTaskId: null });
-          this.publish(run.taskId);
-          return { text: "Review saved. The change goes to the user for merge approval. End your turn now with a short summary." };
-        }
-
-        this.store.addMessage({
-          taskId: run.taskId,
-          runId,
-          role: "agent",
-          kind: "review",
-          text: `Requested changes in round ${round}: ${blocking.length} blocking issue${blocking.length === 1 ? "" : "s"}.`,
-          data: { reviewVersion: saved.version },
-        });
-
-        // Out of rounds: stop the loop and let the user decide.
-        if (cycleRound >= MAX_REVIEW_ROUNDS) {
-          this.store.setNeedsInput(run.taskId, true);
-          this.store.addMessage({
-            taskId: run.taskId,
-            runId: null,
-            role: "system",
-            kind: "status",
-            text: `The reviewer requested changes ${MAX_REVIEW_ROUNDS} rounds in a row, so Dot stopped the loop. Approve the change as it is, or request changes yourself.`,
-          });
-          this.publish(run.taskId);
-          return { text: "Review saved. The review round limit is reached, so the user decides next. End your turn now with a short summary." };
-        }
-
-        const executorRun = this.store.latestRun(run.taskId, "execute");
-        if (!executorRun) return { text: "This task has no executor to send the issues to.", isError: true };
-        this.store.moveTask(task.id, { column: "execute", beforeTaskId: null });
-        // The executor starts once this reviewer's process exits, so the two never share the worktree.
-        live.fixOnExit = {
-          executorRunId: executorRun.id,
-          prompt: [fixRequest(review.issues, round, MAX_REVIEW_ROUNDS - cycleRound), leftoverNote].filter(Boolean).join("\n\n"),
-        };
-        this.publish(run.taskId);
-        return { text: "Review saved. The issues go back to the executor. End your turn now with a short summary." };
-      },
-    });
-
-    if (run.stage === "research") return [askHuman, submitPlan];
-    if (run.stage === "execute") return [askHuman, submitExecutionReport];
-    return [askHuman, submitReview];
+    return agentTools({ store: this.store, publish: (taskId) => this.publish(taskId) }, this.store.getRun(runId), this.getLive(runId));
   }
 
   // Process management
