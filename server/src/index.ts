@@ -5,6 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { createApp } from "./app.ts";
 import { Auth } from "./auth.ts";
+import { startBackups } from "./backup.ts";
 import { openDb } from "./db.ts";
 import { EventBus } from "./events.ts";
 import { guardRules } from "./agents/guards.ts";
@@ -41,21 +42,29 @@ const dbFile = process.env.DOT_DB ?? resolve(dataDir, "dot.db");
 if (isolated) process.umask(0o077);
 const worktreesDir = resolve(dataDir, "worktrees");
 const reposDir = resolve(dataDir, "repos");
+const backupsDir = resolve(dataDir, "backups");
 if (isolated) {
   agentDir(worktreesDir);
   agentDir(reposDir);
   configureTransport(resolve(dataDir, "transport"));
 }
 
-const store = new Store(openDb(dbFile));
+const db = openDb(dbFile);
+const store = new Store(db);
 // After the database exists, so the check can try to read it as the agent user. Refuses to start
 // when an agent could reach something private, rather than running agents quietly with too much access.
 try {
-  verifyIsolation([dbFile, `${dbFile}-wal`, `${dbFile}-shm`, resolve(dataDir, "session.json"), resolve(dataDir, "attachments")]);
+  verifyIsolation([dbFile, `${dbFile}-wal`, `${dbFile}-shm`, resolve(dataDir, "session.json"), resolve(dataDir, "attachments"), backupsDir]);
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 }
+// A snapshot of the database at startup and then daily, so a bad migration or a disk fault costs a day.
+const stopBackups = startBackups(db, {
+  dir: backupsDir,
+  keep: Math.max(0, Number(process.env.DOT_BACKUP_KEEP ?? 7)),
+});
+process.on("exit", stopBackups);
 const bus = new EventBus();
 const orchestrator = new Orchestrator(store, bus, {
   port,

@@ -33,7 +33,7 @@ export function guardRules(options: { port: number; root: string; dataDir: strin
 
   // Dot's settings file, its database and session secret, its attachments and its transport repositories.
   // Not the whole data folder: the agents' worktrees live inside it.
-  const privatePaths = [`${root}/.env`, dbFile, `${dataDir}/session.json`, `${dataDir}/attachments`, `${dataDir}/transport`];
+  const privatePaths = [`${root}/.env`, dbFile, `${dataDir}/session.json`, `${dataDir}/attachments`, `${dataDir}/transport`, `${dataDir}/backups`];
   for (const path of privatePaths.flatMap(spellings)) {
     rules.add(`Bash(*${path}*)`);
   }
