@@ -60,3 +60,13 @@ test("comments become notes that name the file and line", () => {
     ].join("\n"),
   );
 });
+
+test("a comment is outdated when its line changed or its file left the diff", async () => {
+  const { outdatedComments } = await import("./diffComments.ts");
+  const files = [{ path: "a.ts", patch }];
+  const same: LineComment = { id: 1, path: "a.ts", kind: "add", oldNo: null, newNo: 11, code: "new", text: "ok" };
+  const edited: LineComment = { ...same, id: 2, code: "something else" };
+  const moved: LineComment = { ...same, id: 3, newNo: 30 };
+  const gone: LineComment = { ...same, id: 4, path: "b.ts" };
+  assert.deepEqual(outdatedComments([same, edited, moved, gone], files).map((c) => c.id), [2, 3, 4]);
+});

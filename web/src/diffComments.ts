@@ -69,3 +69,19 @@ export function commentsToNotes(comments: LineComment[]): string {
   });
   return `Comments on the diff:\n\n${blocks.join("\n")}`;
 }
+
+function signature(path: string, line: { kind: string; oldNo: number | null; newNo: number | null }, code: string): string {
+  return `${lineKey(path, line)}\u0000${line.kind}\u0000${code}`;
+}
+
+// Comments whose line is no longer in the diff as it was: the file left the diff, or the executor changed
+// the line or moved it. They still quote their code, so they can be sent, but they are shown apart.
+export function outdatedComments(comments: LineComment[], files: { path: string; patch: string }[]): LineComment[] {
+  const present = new Set<string>();
+  for (const file of files) {
+    for (const line of parseHunks(file.patch)) {
+      if (line.kind !== "hunk" && line.kind !== "meta") present.add(signature(file.path, line, line.text.slice(1)));
+    }
+  }
+  return comments.filter((c) => !present.has(signature(c.path, c, c.code)));
+}

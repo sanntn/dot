@@ -57,7 +57,12 @@ export class MergeStep {
       this.running.delete(taskId);
     }
 
-    if (task.column === "merge_approval") {
+    // The stop above can take seconds. You may have moved the card or requested changes meanwhile.
+    const current = this.store.getTask(taskId);
+    if (current.column !== "merge_approval" && current.column !== "merge") {
+      throw new HttpError(409, "The task moved while the agents stopped. Approve the merge again when it is back in Merge approval.");
+    }
+    if (current.column === "merge_approval") {
       this.store.moveTask(taskId, { column: "merge", beforeTaskId: null });
       this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "You approved the merge." });
     }
@@ -219,10 +224,22 @@ export class MergeStep {
       text: `Merged pull request #${prId} into ${project.baseBranch}.`,
     });
     this.hooks.publish(taskId);
-    if (task.worktreePath) await removeWorktree(project.repoPath, task.worktreePath);
-    if (task.branch) {
-      await deleteBranch(project.repoPath, task.branch);
-      this.store.setTaskWorkspace(taskId, task.branch, null);
+    // The merge is done. A cleanup problem must not turn it into a failed merge.
+    try {
+      if (task.worktreePath) await removeWorktree(project.repoPath, task.worktreePath);
+      if (task.branch) {
+        await deleteBranch(project.repoPath, task.branch);
+        this.store.setTaskWorkspace(taskId, task.branch, null);
+      }
+    } catch (err) {
+      this.store.addMessage({
+        taskId,
+        runId: null,
+        role: "system",
+        kind: "status",
+        text: `Merged, but the cleanup did not finish: ${err instanceof Error ? err.message : gitError(err)}. Remove the worktree from Preferences, under Disk space.`,
+      });
+      this.hooks.publish(taskId);
     }
   }
 

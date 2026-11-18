@@ -67,9 +67,16 @@ export function ClampedProse({ children, className, maxHeight = 176 }: { childre
   const [overflows, setOverflows] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
+  // Measures again when the text changes and when the panel is resized, since a narrower box wraps to more lines.
   useLayoutEffect(() => {
     const el = box.current;
-    if (el) setOverflows(el.scrollHeight > maxHeight + 8);
+    if (!el) return;
+    const measure = () => setOverflows(el.scrollHeight > maxHeight + 8);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [children, maxHeight]);
 
   const clamped = overflows && !open && !full;

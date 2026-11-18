@@ -144,6 +144,8 @@ type Live = {
   // Messages that arrived while no process could take them. The next launch sends them.
   pending: ContentBlock[][];
   stopped: boolean;
+  // Set when Dot stopped the agent and already said why, so the exit does not add a plain "Stopped."
+  quietStop: boolean;
   // Resolves when the current process exits. Already resolved while none is running.
   exited: Promise<void>;
   resolveExited: () => void;
@@ -237,6 +239,10 @@ export class Orchestrator {
     this.checksFixed.delete(taskId);
     // A retry starts a new cycle, like your own change request does.
     if (stage !== "review") this.store.setReviewRound(taskId, 0);
+    // Redoing a review of the same report must not use up one of the rounds before the loop stops.
+    else if (this.store.latestReview(taskId)?.reportVersion === this.store.latestExecutionReport(taskId)?.version) {
+      this.store.setReviewRound(taskId, Math.max(0, task.reviewRound - 1));
+    }
     if (task.column !== STAGE_COLUMN[stage]) this.store.moveTask(taskId, { column: STAGE_COLUMN[stage], beforeTaskId: null });
     const note = `Retrying the ${STAGE_LABELS[stage].toLowerCase()} with a new session.`;
     if (stage === "research") return this.beginResearch(this.store.getTask(taskId), project, note);
@@ -711,7 +717,7 @@ ${checksSummary(results)}` });
           text: `Stopped: the ${STAGE_LABELS[live.stage].toLowerCase()} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}. It may be hung on a command or a network call. Resume it or send a message to start it again.`,
         });
         this.bus.publish({ type: "messages.changed", taskId: live.taskId });
-        void this.stop(live.taskId);
+        this.stopQuietly(live.taskId);
       });
     }
   }
@@ -825,6 +831,7 @@ ${checksSummary(results)}` });
         costBase: run.costUsd,
         pending: [],
         stopped: false,
+        quietStop: false,
         exited: Promise.resolve(),
         resolveExited: () => {},
         refs: null,
@@ -837,6 +844,12 @@ ${checksSummary(results)}` });
     return live;
   }
 
+  private otherAgentActive(live: Live): boolean {
+    return [...this.live.values()].some(
+      (l) => l !== live && l.taskId === live.taskId && !l.stopped && (l.process !== null || this.queue.includes(l.runId)),
+    );
+  }
+
   private runningCount(): number {
     let count = 0;
     for (const live of this.live.values()) if (live.process) count++;
@@ -846,6 +859,7 @@ ${checksSummary(results)}` });
   private dispatch(runId: number, content: ContentBlock[], expectOutcome: boolean): void {
     const live = this.getLive(runId);
     live.stopped = false;
+    live.quietStop = false;
     live.expectOutcome = expectOutcome;
     if (expectOutcome) {
       live.outcome = false;
@@ -1095,7 +1109,13 @@ ${checksSummary(results)}` });
         `since the last check, and the limit is $${budget.toFixed(2)}. Resume the agent or send a message to give it another $${budget.toFixed(2)}.`,
     });
     this.bus.publish({ type: "messages.changed", taskId: task.id });
-    void this.stop(task.id);
+    this.stopQuietly(task.id);
+  }
+
+  // Stops the task's agents after Dot posted its own reason, so their exit adds no second "Stopped." line.
+  private stopQuietly(taskId: number): void {
+    for (const live of this.live.values()) if (live.taskId === taskId) live.quietStop = true;
+    void this.stop(taskId);
   }
 
   private onTurnEnd(live: Live): void {
@@ -1132,7 +1152,9 @@ ${checksSummary(results)}` });
     let failed = false;
     if (live.stopped) {
       this.store.updateRun(live.runId, { status: "idle" });
-      this.store.addMessage({ taskId: live.taskId, runId: live.runId, role: "system", kind: "status", text: "Stopped." });
+      if (!live.quietStop) {
+        this.store.addMessage({ taskId: live.taskId, runId: live.runId, role: "system", kind: "status", text: "Stopped." });
+      }
     } else if (!info.sawResult && info.code !== 0) {
       failed = true;
       const detail = info.stderr || `The claude process exited with code ${info.code}.`;
@@ -1157,7 +1179,9 @@ ${checksSummary(results)}` });
         this.store.updateRun(live.runId, { status: "queued" });
         this.store.setAgentState(live.taskId, "queued");
       }
-    } else {
+    } else if (!this.otherAgentActive(live)) {
+      // Not while another run of the task is working or queued, as after Retry from stage. This exit
+      // would otherwise mark the task idle under the new agent.
       const task = this.store.getTask(live.taskId);
       this.store.setAgentState(live.taskId, failed ? "failed" : task.needsInput ? "waiting" : "idle");
     }

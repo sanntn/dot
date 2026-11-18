@@ -311,6 +311,8 @@ test("a task pauses at the project budget, and resuming grants another budget", 
   const paused = await h.until("a budget pause", (t) => t.needsInput && t.agentState !== "running");
   assert.equal(paused.column, "research");
   assert.ok(h.store.listMessages(h.task.id).some((m) => /Paused at the task budget/.test(m.text)));
+  // Dot already said why, so the exit adds no plain "Stopped." line.
+  assert.equal(h.store.listMessages(h.task.id).some((m) => m.text === "Stopped."), false);
   // The nudge for a missing plan must not have been sent.
   assert.equal(h.calls().filter((c) => "prompt" in c).length, 1);
 
@@ -347,6 +349,7 @@ test("an agent that goes silent mid-turn is stopped and flagged", async () => {
   const flagged = await h.until("a stuck flag", (t) => t.needsInput && t.agentState !== "running");
   assert.equal(flagged.column, "research");
   assert.ok(h.store.listMessages(h.task.id).some((m) => /sent nothing for/.test(m.text)));
+  assert.equal(h.store.listMessages(h.task.id).some((m) => m.text === "Stopped."), false);
 });
 
 test("failed project checks go back to the executor once, and the reviewer sees the passing run", async () => {

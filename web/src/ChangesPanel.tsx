@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api, errorMessage } from "./api.ts";
-import { commentKey, commentsToNotes, lineKey, parseHunks, type DiffLine, type LineComment } from "./diffComments.ts";
+import { commentKey, commentsToNotes, lineKey, outdatedComments, parseHunks, type DiffLine, type LineComment } from "./diffComments.ts";
 import { serialLoader } from "./events.ts";
 import { ClampedProse, Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
@@ -39,6 +39,9 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
     }
   }, [comments, storeKey]);
   const [sending, setSending] = useState(false);
+  // Comments whose line has since changed or left the diff. They show apart from the lines.
+  const outdated = useMemo(() => (diff ? outdatedComments(comments, diff.files) : []), [comments, diff]);
+  const current = useMemo(() => comments.filter((c) => !outdated.includes(c)), [comments, outdated]);
   // Comments can go to the executor while the change is in Review or waiting for your approval.
   const canComment = task.column === "review" || task.column === "merge_approval";
 
@@ -155,7 +158,7 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
                 key={f.path}
                 file={f}
                 canComment={canComment && !sending}
-                comments={comments.filter((c) => c.path === f.path)}
+                comments={current.filter((c) => c.path === f.path)}
                 onAdd={(c) => setComments((all) => [...all, { ...c, id: Math.max(0, ...all.map((a) => a.id)) + 1 }])}
                 onRemove={(id) => setComments((all) => all.filter((c) => c.id !== id))}
               />
@@ -165,7 +168,32 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
       )}
 
       {comments.length > 0 && (
-        <div className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-3">
+        <div className="sticky bottom-0 -mx-4 -mb-4 grid gap-2 border-t bg-background px-4 py-3">
+          {outdated.length > 0 && (
+            <div className="grid gap-1 text-xs">
+              <p className="text-muted-foreground">
+                The executor changed these lines since you commented. They still go out with the code they quote.
+              </p>
+              <ul className="grid gap-1">
+                {outdated.map((c) => (
+                  <li key={c.id} className="flex items-start gap-2 rounded-md border px-2 py-1">
+                    <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                      <code className="font-mono">{c.path}</code>: {c.text}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Remove comment"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setComments((all) => all.filter((x) => x.id !== c.id))}
+                    >
+                      <X className="size-3.5" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm">
             {comments.length} {comments.length === 1 ? "comment" : "comments"}
           </span>
@@ -180,6 +208,7 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
           <Button size="sm" variant="ghost" disabled={sending} onClick={() => setComments([])}>
             Discard
           </Button>
+          </div>
         </div>
       )}
     </div>
