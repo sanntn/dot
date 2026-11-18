@@ -483,6 +483,14 @@ function TaskCardSlot(props: {
             <span className="flex items-center gap-2">
               <span className="tabular-nums">#{task.number}</span>
               <AgentBadge task={task} />
+              {task.costUsd >= 0.005 && (
+                <span
+                  className="tabular-nums"
+                  title="What this task's agent runs would cost at API prices. Your subscription covers it."
+                >
+                  ${task.costUsd.toFixed(2)}
+                </span>
+              )}
             </span>
             {action && (
               <Button size="sm" variant={retry ? "outline" : "default"} onClick={retry ? props.onStart : props.onOpen}>

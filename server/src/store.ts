@@ -97,7 +97,9 @@ const TASK_SELECT = `SELECT tasks.*, (
     SELECT group_concat(b.id || ':' || b.number)
     FROM task_dependencies d JOIN tasks b ON b.id = d.blocked_by_id
     WHERE d.task_id = tasks.id AND b.column_key != 'done'
-  ) AS blocked_by FROM tasks`;
+  ) AS blocked_by, (
+    SELECT COALESCE(SUM(r.cost_usd), 0) FROM runs r WHERE r.task_id = tasks.id
+  ) AS cost_usd FROM tasks`;
 
 function parseBlockers(value: unknown): Task["blockedBy"] {
   if (typeof value !== "string" || value === "") return [];
@@ -123,6 +125,7 @@ function toTask(row: Row): Task {
     prId: row.pr_id as number | null,
     prUrl: row.pr_url as string | null,
     reviewRound: row.review_round as number,
+    costUsd: (row.cost_usd as number | undefined) ?? 0,
     blockedBy: parseBlockers(row.blocked_by),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,

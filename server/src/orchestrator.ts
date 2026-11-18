@@ -792,6 +792,8 @@ export class Orchestrator {
     if (event.type === "result") {
       const cost = typeof event.total_cost_usd === "number" ? event.total_cost_usd : 0;
       this.store.updateRun(live.runId, { costUsd: live.costBase + cost });
+      const projectId = this.store.getTask(live.taskId).projectId;
+      this.bus.publish({ type: "tasks.changed", projectId, taskId: live.taskId });
       if (event.is_error === true) {
         const detail = typeof event.result === "string" && event.result ? event.result : String(event.subtype ?? "error");
         this.store.addMessage({ taskId: live.taskId, runId: live.runId, role: "system", kind: "error", text: detail });

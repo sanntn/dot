@@ -177,6 +177,8 @@ export const TaskSchema = z.object({
   prId: z.number().int().nullable(),
   prUrl: z.string().nullable(),
   reviewRound: z.number().int(),
+  // What all the task's agent runs would cost at API prices. Subscriptions cover it, so it is a size guide.
+  costUsd: z.number(),
   // Tasks that must be done before this one can start. Finished blockers drop off the list.
   blockedBy: z.array(z.object({ id: z.number().int(), number: z.number().int() })),
   createdAt: z.string(),

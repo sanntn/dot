@@ -167,6 +167,9 @@ test("a task goes from the inbox to merge approval through three agents", async 
   const runs = h.orchestrator.runsFor(h.task.id);
   assert.equal(runs.length, 3);
   assert.ok(runs.every((r) => r.costUsd > 0));
+  // The task carries the sum, so the board card can show it.
+  const total = runs.reduce((sum, r) => sum + r.costUsd, 0);
+  assert.ok(Math.abs(h.store.getTask(h.task.id).costUsd - total) < 1e-9);
 });
 
 test("ask_human flags the task, and the answer resumes the session", async () => {
