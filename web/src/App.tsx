@@ -1,8 +1,9 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { FolderGit2, Plus, Settings, X } from "lucide-react";
+import { Ellipsis, FolderGit2, FolderPlus, Plus, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, errorMessage } from "./api.ts";
 import { Board } from "./Board.tsx";
@@ -11,11 +12,15 @@ import { applyMove } from "./move.ts";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { TaskDialog } from "./TaskDialog.tsx";
 import { TaskSheet } from "./TaskSheet.tsx";
+import { laneOf } from "./lanes.ts";
+import { ShortcutsDialog } from "./ShortcutsDialog.tsx";
+import { useShortcuts } from "./shortcuts.ts";
 import { UsageLimits } from "./UsageLimits.tsx";
 
 type OpenDialog =
   | { kind: "new-task" }
   | { kind: "task"; taskId: number }
+  | { kind: "shortcuts" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
 
@@ -121,6 +126,16 @@ export function App() {
 
   const closeDialog = () => setDialog(null);
 
+  // The tab title counts what waits for you, so it shows from another tab.
+  const waiting = tasks.filter((t) => laneOf(t) === "needs_you").length;
+  useEffect(() => {
+    document.title = waiting > 0 ? `(${waiting}) Dot` : "Dot";
+  }, [waiting]);
+
+  const openNewTask = useCallback(() => setDialog({ kind: "new-task" }), []);
+  const openShortcuts = useCallback(() => setDialog({ kind: "shortcuts" }), []);
+  useShortcuts({ newTask: project ? openNewTask : null, help: openShortcuts, enabled: dialog === null });
+
   // The panel always shows the live task from the board, so agent progress updates in place.
   const openTask = dialog?.kind === "task" ? (tasks.find((t) => t.id === dialog.taskId) ?? null) : null;
 
@@ -177,26 +192,36 @@ export function App() {
                 ))}
               </SelectContent>
             </Select>
-            {project && (
-              <Button variant="ghost" onClick={() => setDialog({ kind: "project", project })}>
-                <Settings aria-hidden="true" />
-                Settings
-              </Button>
-            )}
           </>
         )}
 
         <span className="flex-1" />
         <UsageLimits configDir={project?.claudeConfigDir ?? null} token={project?.claudeToken ?? null} />
-        <Button variant="outline" onClick={() => setDialog({ kind: "new-project" })}>
-          New project
-        </Button>
         {project && (
           <Button onClick={() => setDialog({ kind: "new-task" })}>
             <Plus aria-hidden="true" />
             New task
           </Button>
         )}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="More: new project, project settings">
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="grid w-56 gap-0.5 p-1">
+            <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
+              <FolderPlus aria-hidden="true" />
+              New project
+            </Button>
+            {project && (
+              <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "project", project })}>
+                <Settings aria-hidden="true" />
+                Settings
+              </Button>
+            )}
+          </PopoverContent>
+        </Popover>
       </header>
 
       {error && (
@@ -236,6 +261,7 @@ export function App() {
 
       {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} onClose={closeDialog} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} onClose={closeTaskDialog(openTask.id)} />}
+      {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
       {(dialog?.kind === "new-project" || dialog?.kind === "project") && (
         <ProjectDialog
           project={dialog.kind === "project" ? dialog.project : null}

@@ -1,4 +1,4 @@
-import { COLUMN_LABELS, COLUMNS, type Column, type Task, type TaskMove } from "@dot/shared";
+import { COLUMNS, type Column, type Task, type TaskMove } from "@dot/shared";
 import {
   useEffect,
   useId,
@@ -9,23 +9,23 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
-import { GripVertical } from "lucide-react";
+import { Check, GripVertical } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { LANE_ENTRY, LANE_LABELS, LANES, laneOf, stepOf, type Lane } from "./lanes.ts";
 import { byPosition } from "./move.ts";
 
-// Plan review and merge approval wait for you, so they get the warm dot.
-const COLUMN_DOT: Record<Column, string> = {
+// Needs you is the only lane that waits on a person, so it gets the warm dot and tint.
+const LANE_DOT: Record<Lane, string> = {
   inbox: "bg-muted-foreground/50",
-  research: "bg-sky-500",
-  plan_review: "bg-amber-500",
-  execute: "bg-sky-500",
-  review: "bg-sky-500",
-  merge_approval: "bg-amber-500",
-  merge: "bg-sky-500",
+  working: "bg-sky-500",
+  needs_you: "bg-amber-500",
   done: "bg-emerald-500",
 };
+
+type DropTarget = TaskMove & { lane: Lane };
 
 type DragState = {
   task: Task;
@@ -36,14 +36,14 @@ type DragState = {
   lastX: number;
   lastY: number;
   scrollStart: number;
-  drop: TaskMove | null;
+  drop: DropTarget | null;
   frame: number;
   lastTime: number | null;
 };
 
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const sameMove = (a: TaskMove | null, b: TaskMove | null) =>
-  a?.column === b?.column && a?.beforeTaskId === b?.beforeTaskId;
+const sameMove = (a: DropTarget | null, b: DropTarget | null) =>
+  a?.lane === b?.lane && a?.column === b?.column && a?.beforeTaskId === b?.beforeTaskId;
 
 export function Board(props: {
   tasks: Task[];
@@ -54,7 +54,7 @@ export function Board(props: {
   const { tasks, onMove, announce } = props;
   const boardRef = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
-  const [drop, setDrop] = useState<TaskMove | null>(null);
+  const [drop, setDrop] = useState<DropTarget | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   // Where the dragged card started. It is pinned there with position: fixed so the column's overflow can't clip it.
   const [dragRect, setDragRect] = useState<DOMRect | null>(null);
@@ -67,6 +67,16 @@ export function Board(props: {
     const map = Object.fromEntries(COLUMNS.map((c) => [c, [] as Task[]])) as Record<Column, Task[]>;
     for (const task of tasks) map[task.column].push(task);
     for (const list of Object.values(map)) list.sort(byPosition);
+    return map;
+  }, [tasks]);
+
+  // Cards in a lane keep pipeline order, then board position.
+  const lanes = useMemo(() => {
+    const map = Object.fromEntries(LANES.map((l) => [l, [] as Task[]])) as Record<Lane, Task[]>;
+    for (const task of tasks) map[laneOf(task)].push(task);
+    for (const list of Object.values(map)) {
+      list.sort((a, b) => COLUMNS.indexOf(a.column) - COLUMNS.indexOf(b.column) || byPosition(a, b));
+    }
     return map;
   }, [tasks]);
 
@@ -92,11 +102,12 @@ export function Board(props: {
 
     const task = tasks.find((t) => t.id === pending.id);
     if (task) {
-      const list = columns[task.column];
+      const lane = laneOf(task);
+      const list = lanes[lane];
       const position = list.findIndex((t) => t.id === task.id) + 1;
-      announce(`Moved ${task.title} to ${COLUMN_LABELS[task.column]}, position ${position} of ${list.length}.`);
+      announce(`Moved ${task.title} to ${LANE_LABELS[lane]}, position ${position} of ${list.length}.`);
     }
-  }, [tasks, columns, announce]);
+  }, [tasks, lanes, announce]);
 
   function commitMove(task: Task, move: TaskMove, card: HTMLElement, keyboard: boolean) {
     pendingMove.current = { id: task.id, from: card.getBoundingClientRect(), keyboard };
@@ -109,25 +120,28 @@ export function Board(props: {
     return list[list.findIndex((t) => t.id === task.id) + 1]?.id ?? null;
   }
 
-  function findDrop(x: number, y: number, task: Task): TaskMove | null {
+  function findDrop(x: number, y: number, task: Task): DropTarget | null {
     // The dragged card has pointer-events: none, so this hits whatever is under it.
-    const columnEl = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-column]");
-    if (!columnEl) return null;
-    const column = columnEl.dataset.column as Column;
+    const laneEl = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-lane]");
+    if (!laneEl) return null;
+    const lane = laneEl.dataset.lane as Lane;
+    // Inside its own lane a card keeps its column. In another lane it enters at that lane's first column.
+    const column = lane === laneOf(task) ? task.column : LANE_ENTRY[lane];
 
     let beforeTaskId: number | null = null;
-    for (const card of columnEl.querySelectorAll<HTMLElement>("[data-task-id]")) {
+    for (const card of laneEl.querySelectorAll<HTMLElement>("[data-task-id]")) {
       const id = Number(card.dataset.taskId);
       if (id === task.id) continue;
       const rect = card.getBoundingClientRect();
       if (y < rect.top + rect.height / 2) {
-        beforeTaskId = id;
+        // A card in another column can't anchor the drop, so the task goes to the end of its column.
+        if (card.dataset.column === column) beforeTaskId = id;
         break;
       }
     }
 
     if (column === task.column && beforeTaskId === nextSiblingId(task)) return null;
-    return { column, beforeTaskId };
+    return { lane, column, beforeTaskId };
   }
 
   function update() {
@@ -177,7 +191,7 @@ export function Board(props: {
 
     if (commit && d.drop) {
       // Measure with the drag offset still applied, so the card animates from where it was released.
-      commitMove(d.task, d.drop, d.card, false);
+      commitMove(d.task, { column: d.drop.column, beforeTaskId: d.drop.beforeTaskId }, d.card, false);
       d.card.style.translate = "";
     } else {
       d.card.style.translate = "";
@@ -236,20 +250,20 @@ export function Board(props: {
   // Alt + arrows: left/right moves between columns, up/down reorders within one.
   function onHandleKeyDown(e: KeyboardEvent<HTMLButtonElement>, task: Task) {
     if (!e.altKey) return;
-    const columnIndex = COLUMNS.indexOf(task.column);
+    const laneIndex = LANES.indexOf(laneOf(task));
     const list = columns[task.column];
     const index = list.findIndex((t) => t.id === task.id);
     let move: TaskMove | null = null;
 
     switch (e.key) {
       case "ArrowLeft": {
-        const column = COLUMNS[columnIndex - 1];
-        if (column) move = { column, beforeTaskId: null };
+        const lane = LANES[laneIndex - 1];
+        if (lane) move = { column: LANE_ENTRY[lane], beforeTaskId: null };
         break;
       }
       case "ArrowRight": {
-        const column = COLUMNS[columnIndex + 1];
-        if (column) move = { column, beforeTaskId: null };
+        const lane = LANES[laneIndex + 1];
+        if (lane) move = { column: LANE_ENTRY[lane], beforeTaskId: null };
         break;
       }
       case "ArrowUp": {
@@ -271,35 +285,46 @@ export function Board(props: {
   return (
     <div
       ref={boardRef}
-      className="grid min-h-0 flex-1 auto-cols-[17rem] grid-flow-col grid-rows-[minmax(0,1fr)] gap-3 overflow-x-auto p-4"
+      className="grid min-h-0 flex-1 auto-cols-[minmax(16rem,1fr)] grid-flow-col grid-rows-[minmax(0,1fr)] gap-4 overflow-x-auto p-4"
     >
       <p id={hintId} hidden>
-        Drag to move. Or press Alt with the arrow keys. Left and right change column, up and down change order.
+        Drag to move. Or press Alt with the arrow keys. Left and right change lane, up and down change order.
       </p>
-      {COLUMNS.map((column) => {
-        const list = columns[column];
-        const headingId = `${hintId}-${column}`;
-        const markerBefore = drop?.column === column ? drop.beforeTaskId : undefined;
+      {LANES.map((lane) => {
+        const list = lanes[lane];
+        const headingId = `${hintId}-${lane}`;
+        const markerBefore = drop?.lane === lane ? drop.beforeTaskId : undefined;
+        const waiting = lane === "needs_you";
         return (
           <section
-            key={column}
-            data-column={column}
+            key={lane}
+            data-lane={lane}
             aria-labelledby={headingId}
             className={cn(
-              "grid min-h-0 grid-rows-[auto_1fr] rounded-xl bg-muted/60 ring-1 ring-transparent transition-shadow",
-              drop?.column === column && "ring-2 ring-primary/50",
+              "grid min-h-0 grid-rows-[auto_1fr] rounded-2xl border bg-muted/40 ring-1 ring-transparent transition-shadow",
+              waiting && "border-amber-500/30 bg-amber-500/5",
+              drop?.lane === lane && "ring-2 ring-primary/50",
             )}
           >
             <header className="flex items-center justify-between px-3 pt-3 pb-2">
               <h2 id={headingId} className="flex items-center gap-2 text-sm font-medium">
-                <span aria-hidden="true" className={cn("size-2 rounded-full", COLUMN_DOT[column])} />
-                {COLUMN_LABELS[column]}
+                <span aria-hidden="true" className={cn("size-2 rounded-full", LANE_DOT[lane])} />
+                {LANE_LABELS[lane]}
               </h2>
-              <Badge variant="secondary" className="tabular-nums" aria-label={`${list.length} tasks`}>
+              <Badge
+                variant="secondary"
+                className={cn("tabular-nums", waiting && list.length > 0 && "bg-amber-500/15 text-amber-700 dark:text-amber-300")}
+                aria-label={`${list.length} tasks`}
+              >
                 {list.length}
               </Badge>
             </header>
             <ol className="flex min-h-12 flex-col gap-2 overflow-y-auto px-2 pt-1 pb-3">
+              {list.length === 0 && markerBefore === undefined && (
+                <li className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+                  {lane === "needs_you" ? "Nothing waits for you" : lane === "inbox" ? "No tasks waiting" : "Nothing here yet"}
+                </li>
+              )}
               {list.map((task) => (
                 <TaskCardSlot
                   key={task.id}
@@ -325,6 +350,13 @@ export function Board(props: {
   );
 }
 
+function actionLabel(task: Task): string | null {
+  if (task.needsInput) return "Answer";
+  if (task.column === "plan_review") return "Review plan";
+  if (task.column === "merge_approval") return "Review";
+  return null;
+}
+
 function TaskCardSlot(props: {
   task: Task;
   showMarker: boolean;
@@ -339,12 +371,16 @@ function TaskCardSlot(props: {
   onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
   const { task } = props;
+  const done = task.column === "done";
+  const step = done || task.column === "inbox" ? null : stepOf(task);
+  const action = actionLabel(task);
   return (
     <>
       {props.showMarker && <DropMarker />}
       {props.dragRect && <li aria-hidden="true" style={{ height: props.dragRect.height }} />}
       <li
         data-task-id={task.id}
+        data-column={task.column}
         data-dragging={props.dragging || undefined}
         style={
           props.dragRect
@@ -358,7 +394,8 @@ function TaskCardSlot(props: {
             : undefined
         }
         className={cn(
-          "relative grid scroll-m-3 grid-cols-[auto_minmax(0,1fr)] rounded-lg border bg-card text-card-foreground shadow-xs",
+          "relative grid scroll-m-3 grid-cols-[auto_minmax(0,1fr)] rounded-xl border bg-card text-card-foreground shadow-xs",
+          done && "bg-card/60 shadow-none",
           "has-[.card-handle:focus-visible]:ring-3 has-[.card-handle:focus-visible]:ring-ring/50",
           "data-dragging:pointer-events-none data-dragging:z-10 data-dragging:scale-[1.02] data-dragging:shadow-xl",
         )}
@@ -366,7 +403,7 @@ function TaskCardSlot(props: {
         <button
           type="button"
           className={cn(
-            "card-handle grid w-6 cursor-grab touch-none place-items-center rounded-l-lg text-muted-foreground/60 select-none",
+            "card-handle grid w-6 cursor-grab touch-none place-items-center rounded-l-xl text-muted-foreground/60 select-none",
             "outline-none hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground",
           )}
           aria-label={`Move ${task.title}`}
@@ -380,20 +417,52 @@ function TaskCardSlot(props: {
         >
           <GripVertical className="size-4" aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          onClick={props.onOpen}
-          className="card-open grid min-w-0 cursor-pointer gap-1 rounded-r-lg py-2.5 pr-3 pl-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        >
-          <span className="text-sm font-medium [overflow-wrap:anywhere]">{task.title}</span>
-          {task.description && (
-            <span className="line-clamp-2 text-xs text-muted-foreground">{task.description}</span>
+        <div className="grid min-w-0 gap-2.5 py-3 pr-3 pl-1">
+          <button
+            type="button"
+            onClick={props.onOpen}
+            className="card-open grid min-w-0 cursor-pointer gap-1 rounded-md text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <span className={cn("flex items-start gap-2 text-sm font-medium [overflow-wrap:anywhere]", done && "font-normal text-muted-foreground")}>
+              {done && <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" aria-hidden="true" />}
+              {task.title}
+            </span>
+            {!done && task.description && (
+              <span className="line-clamp-2 text-xs text-muted-foreground">{task.description}</span>
+            )}
+          </button>
+          {step && (
+            <div className="grid gap-1.5">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{step.label}</span>
+                <span className="tabular-nums">
+                  {step.index + 1} / {step.total}
+                </span>
+              </div>
+              <div
+                role="progressbar"
+                aria-label={`Step ${step.index + 1} of ${step.total}: ${step.label}`}
+                aria-valuenow={((step.index + 1) / step.total) * 100}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="h-1.5 overflow-hidden rounded-full bg-primary/15"
+              >
+                <div className="h-full bg-primary" style={{ width: `${((step.index + 1) / step.total) * 100}%` }} />
+              </div>
+            </div>
           )}
-          <span className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="tabular-nums">#{task.number}</span>
-            <AgentBadge task={task} />
-          </span>
-        </button>
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <span className="tabular-nums">#{task.number}</span>
+              <AgentBadge task={task} />
+            </span>
+            {action && (
+              <Button size="sm" onClick={props.onOpen}>
+                {action}
+              </Button>
+            )}
+          </div>
+        </div>
       </li>
     </>
   );
