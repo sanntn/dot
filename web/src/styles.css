@@ -204,3 +204,15 @@
     padding: 0.25rem 0.5rem;
   }
 }
+
+/* Fingers need bigger targets than a mouse. On a phone every button is at least 40px tall. */
+@media (max-width: 639px), (pointer: coarse) {
+  [data-slot="button"],
+  [data-slot="sheet-close"],
+  [data-slot="tabs-trigger"] {
+    min-height: 2.5rem;
+  }
+  [data-slot="tabs-list"] {
+    height: auto;
+  }
+}

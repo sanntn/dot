@@ -72,6 +72,8 @@ export function Board(props: {
   // Where the dragged card started. It is pinned there with position: fixed so the column's overflow can't clip it.
   const [dragRect, setDragRect] = useState<DOMRect | null>(null);
   const hintId = useId();
+  // On a phone one lane fills the screen. Until you pick one, it is the lane that waits for you.
+  const [picked, setPicked] = useState<Lane | null>(null);
 
   // After a move, animate the card from where it was (FLIP) and, for keyboard moves, keep focus on its handle.
   const pendingMove = useRef<{ id: number; from: DOMRect; keyboard: boolean } | null>(null);
@@ -92,6 +94,8 @@ export function Board(props: {
     }
     return map;
   }, [tasks]);
+
+  const shownLane: Lane = picked ?? (lanes.needs_you.length > 0 ? "needs_you" : lanes.working.length > 0 ? "working" : "inbox");
 
   useLayoutEffect(() => {
     const pending = pendingMove.current;
@@ -296,9 +300,32 @@ export function Board(props: {
   }
 
   return (
+    <div className="flex min-h-0 flex-1 flex-col">
+    <nav aria-label="Lanes" className="grid grid-cols-4 gap-1 border-b px-2 py-2 sm:hidden">
+      {LANES.map((lane) => (
+        <button
+          key={lane}
+          type="button"
+          aria-pressed={shownLane === lane}
+          onClick={() => setPicked(lane)}
+          className={cn(
+            "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs text-muted-foreground",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            shownLane === lane && "bg-muted font-medium text-foreground",
+            lane === "needs_you" && lanes[lane].length > 0 && "text-amber-700 dark:text-amber-300",
+          )}
+        >
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className={cn("size-2 rounded-full", LANE_DOT[lane])} />
+            {LANE_LABELS[lane]}
+          </span>
+          <span className="tabular-nums">{lanes[lane].length}</span>
+        </button>
+      ))}
+    </nav>
     <div
       ref={boardRef}
-      className="grid min-h-0 flex-1 auto-cols-[minmax(16rem,1fr)] grid-flow-col grid-rows-[minmax(0,1fr)] gap-4 overflow-x-auto p-4"
+      className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 overflow-x-auto p-3 sm:auto-cols-[minmax(16rem,1fr)] sm:grid-flow-col sm:grid-cols-none sm:p-4"
     >
       <p id={hintId} hidden>
         Drag to move. Or press Alt with the arrow keys. Left and right change lane, up and down change order.
@@ -314,7 +341,8 @@ export function Board(props: {
             data-lane={lane}
             aria-labelledby={headingId}
             className={cn(
-              "grid min-h-0 grid-rows-[auto_1fr] rounded-2xl border bg-muted/40 ring-1 ring-transparent transition-shadow",
+              "min-h-0 grid-rows-[auto_1fr] rounded-2xl border bg-muted/40 ring-1 ring-transparent transition-shadow sm:grid",
+              shownLane === lane ? "grid" : "hidden",
               waiting && "border-amber-500/30 bg-amber-500/5",
               drop?.lane === lane && "ring-2 ring-primary/50",
             )}
@@ -363,6 +391,7 @@ export function Board(props: {
           </section>
         );
       })}
+    </div>
     </div>
   );
 }
