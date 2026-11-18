@@ -384,7 +384,7 @@ export function createApp(
     return c.json(await cleanStorage(store, options.storage));
   });
 
-  app.get("/projects/:id/tasks",(c) => c.json(store.listTasks(idParam(c))));
+  app.get("/projects/:id/tasks", (c) => c.json(store.listTasks(idParam(c))));
 
   app.post("/tasks", async (c) => {
     const task = store.createTask(await parseBody(c, TaskInputSchema));

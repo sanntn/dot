@@ -346,6 +346,11 @@ export class Store {
 
   deleteTask(id: number): Task {
     const task = this.getTask(id);
+    // Deleting a blocker frees the tasks waiting on it. Those must not start by themselves, since the
+    // blocker never finished.
+    this.db
+      .prepare("UPDATE tasks SET auto_start = 0 WHERE id IN (SELECT task_id FROM task_dependencies WHERE blocked_by_id = ?)")
+      .run(id);
     this.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
     return task;
   }

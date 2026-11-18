@@ -170,10 +170,16 @@ export class Orchestrator {
   ) {
     this.startStuckWatch();
     // Any board change may have finished a blocker, so look for tasks that can start.
+    // Agents publish often, so one pending check covers a burst of events.
     this.unsubscribeBus = bus.subscribe((event) => {
-      if (event.type === "tasks.changed") setImmediate(() => this.startUnblocked());
+      if (event.type !== "tasks.changed" || this.unblockPending) return;
+      this.unblockPending = true;
+      setImmediate(() => {
+        this.unblockPending = false;
+        this.startUnblocked();
+      });
     });
-    this.mergeStep =new MergeStep(store, {
+    this.mergeStep = new MergeStep(store, {
       publish: (taskId) => this.publish(taskId),
       stop: (taskId) => this.stop(taskId),
       resumeExecutor: (runId, prompt) => this.dispatch(runId, [{ type: "text", text: prompt }], true),
@@ -574,9 +580,8 @@ ${checksSummary(results)}` });
   // by itself afterwards. This task's plan loses those steps, so the executor stays on what is left.
   splitPlan(taskId: number, input: PlanSplit): { task: Task; plan: PlanArtifact } {
     const task = this.store.getTask(taskId);
-    if (task.column !== "research" && task.column !== "plan_review") {
-      throw new HttpError(409, "The plan can only be split before it is approved");
-    }
+    // Not in Research: a researcher that is still working would submit a new plan with every step again.
+    if (task.column !== "plan_review") throw new HttpError(409, "A plan can be split while it waits in Plan review");
     const latest = this.store.latestPlan(taskId);
     if (!latest) throw new HttpError(409, "This task has no plan yet");
     const picked = [...new Set(input.steps)].sort((a, b) => a - b);
@@ -656,15 +661,26 @@ ${checksSummary(results)}` });
   }
 
   private unsubscribeBus: (() => void) | null = null;
+  private unblockPending = false;
 
   // Starts the research of every task that asked to start by itself and whose blockers are all done.
   startUnblocked(): void {
     for (const task of this.store.listReadyToAutoStart()) {
-      this.safely(task.id, () => {
-        this.store.setAutoStart(task.id, false);
+      // Clear the flag first, so a start that fails is not retried on every board change.
+      this.store.setAutoStart(task.id, false);
+      try {
         this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: "Its blockers are done, so Dot starts the research." });
         this.startResearch(task.id);
-      });
+      } catch (err) {
+        this.store.addMessage({
+          taskId: task.id,
+          runId: null,
+          role: "system",
+          kind: "error",
+          text: `Could not start the research by itself. Start it by hand.\n\n${err instanceof Error ? err.message : String(err)}`,
+        });
+        this.publish(task.id);
+      }
     }
   }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -36,7 +36,10 @@ test("cleaning removes finished worktrees and orphan folders, and leaves open ta
   store.setTaskWorkspace(open.id, "dot/2-open", folder("2", 2000));
   store.moveTask(done.id, { column: "done", beforeTaskId: null });
   store.moveTask(open.id, { column: "execute", beforeTaskId: null });
-  folder("stray", 1000);
+  const stray = folder("stray", 1000);
+  const young = folder("being-created", 500);
+  const old = new Date(Date.now() - 2 * 60 * 60_000);
+  utimesSync(stray, old, old);
 
   const paths = { worktreesDir, dbFile: join(dir, "none.db"), backupsDir: join(dir, "backups"), attachmentsDir: join(dir, "att") };
   const report = await storageReport(store, paths);
@@ -51,5 +54,6 @@ test("cleaning removes finished worktrees and orphan folders, and leaves open ta
   assert.equal(existsSync(join(worktreesDir, "1")), false);
   assert.equal(existsSync(join(worktreesDir, "stray")), false);
   assert.equal(existsSync(join(worktreesDir, "2")), true);
+  assert.equal(existsSync(young), true, "a new folder may be a worktree in the making");
   assert.equal(await sizeOf(join(dir, "missing")), 0);
 });

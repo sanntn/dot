@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.ts";
 
@@ -29,10 +29,19 @@ export function listBackups(dir: string): string[] {
 export function backupDatabase(db: Db, dir: string, keep: number, date = new Date()): string {
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${PREFIX}${stamp(date)}${SUFFIX}`);
-  // A second backup in the same second would collide. Overwriting is the wrong answer, so skip the name.
+  // Written under another name and renamed when complete, so a failed run never leaves a half file that
+  // looks like the newest backup. VACUUM INTO also refuses to write over a file that exists.
+  const partial = `${file}.partial`;
+  rmSync(partial, { force: true });
   rmSync(file, { force: true });
-  // VACUUM INTO takes a quoted path, not a parameter.
-  db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  try {
+    // VACUUM INTO takes a quoted path, not a parameter.
+    db.exec(`VACUUM INTO '${partial.replaceAll("'", "''")}'`);
+    renameSync(partial, file);
+  } catch (err) {
+    rmSync(partial, { force: true });
+    throw err;
+  }
   for (const old of listBackups(dir).slice(Math.max(1, keep))) rmSync(join(dir, old), { force: true });
   return file;
 }

@@ -93,7 +93,7 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
             Version {artifact.version}, by {artifact.author === "agent" ? "the researcher" : "you"},{" "}
             {new Date(artifact.createdAt).toLocaleString()}
           </p>
-          {editable && plan.steps.length > 1 && (
+          {reviewing && plan.steps.length > 1 && (
             <Button type="button" variant="outline" size="sm" onClick={() => setSplitting(true)}>
               <Split aria-hidden="true" />
               Split

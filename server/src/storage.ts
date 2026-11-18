@@ -1,8 +1,8 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { StorageReport } from "@dot/shared";
-import { gitOk, removeWorktree } from "./git.ts";
+import { gitOk, removeWorktree, uncommittedChanges } from "./git.ts";
 import type { Store } from "./store.ts";
 
 // What Dot keeps on disk, and cleanup of the part that is safe to delete: worktrees of finished tasks and
@@ -32,15 +32,21 @@ export async function sizeOf(path: string): Promise<number> {
   return total;
 }
 
+// A folder this young may belong to a worktree being created right now, before its task records the path.
+const ORPHAN_MIN_AGE_MS = 60 * 60_000;
+
 export type StoragePaths = { worktreesDir: string; dbFile: string; backupsDir: string; attachmentsDir: string };
 
 const inside = (dir: string, path: string) => !relative(resolve(dir), resolve(path)).startsWith("..") && resolve(dir) !== resolve(path);
 
 export async function storageReport(store: Store, paths: StoragePaths): Promise<StorageReport> {
   const claimed = new Set<string>();
+  // Dot names a worktree folder after its task id, so that name is claimed while the task exists.
+  const taskIds = new Set<string>();
   const worktrees: StorageReport["worktrees"] = [];
   for (const project of store.listProjects()) {
     for (const task of store.listTasks(project.id)) {
+      taskIds.add(String(task.id));
       if (!task.worktreePath) continue;
       claimed.add(resolve(task.worktreePath));
       if (!existsSync(task.worktreePath)) continue;
@@ -51,7 +57,8 @@ export async function storageReport(store: Store, paths: StoragePaths): Promise<
         projectName: project.name,
         column: task.column,
         bytes: await sizeOf(task.worktreePath),
-        removable: task.column === "done",
+        // A card dragged to Done by hand may never have merged. Uncommitted work would be lost.
+        removable: task.column === "done" && !(await uncommittedChanges(task.worktreePath).catch(() => "")),
       });
     }
   }
@@ -60,7 +67,9 @@ export async function storageReport(store: Store, paths: StoragePaths): Promise<
   if (existsSync(paths.worktreesDir)) {
     for (const name of await readdir(paths.worktreesDir)) {
       const path = resolve(paths.worktreesDir, name);
-      if (!claimed.has(path)) orphans.push({ name, bytes: await sizeOf(path) });
+      if (claimed.has(path) || taskIds.has(name)) continue;
+      const age = Date.now() - (statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+      if (age >= ORPHAN_MIN_AGE_MS) orphans.push({ name, bytes: await sizeOf(path) });
     }
   }
 
