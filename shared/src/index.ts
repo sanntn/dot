@@ -391,6 +391,15 @@ export const RunStatusSchema = z.enum(["idle", "queued", "running", "failed"]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
 // One agent session for one stage of a task. It can span many turns and process launches.
+export type TaskEvent = {
+  id: number;
+  taskId: number;
+  kind: "moved" | "needs_you" | "failed";
+  // For "moved", the column key the task entered.
+  detail: string;
+  createdAt: string;
+};
+
 export type Run = {
   id: number;
   taskId: number;

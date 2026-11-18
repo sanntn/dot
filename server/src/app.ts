@@ -481,6 +481,12 @@ export function createApp(
     return c.json(orchestrator.runsFor(id));
   });
 
+  app.get("/tasks/:id/events", (c) => {
+    const id = idParam(c);
+    store.getTask(id);
+    return c.json(store.listEvents(id));
+  });
+
   app.get("/tasks/:id/messages", (c) => {
     const id = idParam(c);
     store.getTask(id);

@@ -152,6 +152,17 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   );
   `,
+  `
+  -- A log of moves, tasks that need the user, and failures. Written by the store, read by the Activity tab.
+  CREATE TABLE task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX task_events_task ON task_events(task_id, id);
+  `,
 ];
 
 export type Db = DatabaseSync;

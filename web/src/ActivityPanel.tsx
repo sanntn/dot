@@ -1,5 +1,6 @@
-import { AGENT_STAGES, STAGE_LABELS, type ChatMessage, type Run } from "@dot/shared";
-import { useMemo } from "react";
+import { AGENT_STAGES, COLUMN_LABELS, STAGE_LABELS, type ChatMessage, type Run, type TaskEvent } from "@dot/shared";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "./api.ts";
 
 // Cost and a timeline for one task, built from the runs and messages the task panel already loads.
 
@@ -18,8 +19,14 @@ function clip(text: string, max = 140): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}...` : flat;
 }
 
-function entries(runs: Run[], messages: ChatMessage[]): Entry[] {
-  const list: Entry[] = [];
+function eventEntry(e: TaskEvent): Entry {
+  if (e.kind === "moved") return { at: e.createdAt, label: `Moved to ${COLUMN_LABELS[e.detail as keyof typeof COLUMN_LABELS] ?? e.detail}` };
+  if (e.kind === "needs_you") return { at: e.createdAt, label: "Needs you" };
+  return { at: e.createdAt, label: "The agent stopped with an error", tone: "error" };
+}
+
+function entries(runs: Run[], messages: ChatMessage[], events: TaskEvent[]): Entry[] {
+  const list: Entry[] = events.map(eventEntry);
   for (const run of runs) {
     const name = STAGE_LABELS[run.stage];
     list.push({ at: run.createdAt, label: `${name} started` });
@@ -46,8 +53,22 @@ function dollars(value: number): string {
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function ActivityPanel({ runs, messages }: { runs: Run[]; messages: ChatMessage[] }) {
-  const timeline = useMemo(() => entries(runs, messages), [runs, messages]);
+export function ActivityPanel({ taskId, runs, messages }: { taskId: number; runs: Run[]; messages: ChatMessage[] }) {
+  const [events, setEvents] = useState<TaskEvent[]>([]);
+  // Runs and messages change whenever the task does, so they double as the refetch trigger.
+  useEffect(() => {
+    let alive = true;
+    api.listEvents(taskId).then(
+      (found) => alive && setEvents(found),
+      () => {
+        // The timeline still shows runs and messages without the event log.
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [taskId, runs, messages]);
+  const timeline = useMemo(() => entries(runs, messages, events), [runs, messages, events]);
   const byStage = AGENT_STAGES.map((stage) => {
     const own = runs.filter((r) => r.stage === stage);
     return { stage, count: own.length, cost: own.reduce((sum, r) => sum + r.costUsd, 0) };

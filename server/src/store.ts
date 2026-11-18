@@ -21,6 +21,7 @@ import type {
   ProjectPatchSchema,
   ProjectInputSchema,
   Task,
+  TaskEvent,
   TaskInputSchema,
   TaskTemplate,
   TemplateInputSchema,
@@ -314,6 +315,7 @@ export class Store {
       const setPosition = this.db.prepare("UPDATE tasks SET position = ? WHERE id = ?");
       siblings.forEach((taskId, i) => setPosition.run((i + 1) * POSITION_STEP, taskId));
       this.db.prepare("UPDATE tasks SET column_key = ?, updated_at = ? WHERE id = ?").run(move.column, now(), id);
+      if (task.column !== move.column) this.logEvent(id, "moved", move.column);
       return this.getTask(id);
     });
   }
@@ -324,12 +326,31 @@ export class Store {
     return task;
   }
 
+  private logEvent(taskId: number, kind: TaskEvent["kind"], detail = ""): void {
+    this.db
+      .prepare("INSERT INTO task_events (task_id, kind, detail, created_at) VALUES (?, ?, ?, ?)")
+      .run(taskId, kind, detail, now());
+  }
+
+  listEvents(taskId: number): TaskEvent[] {
+    const rows = this.db.prepare("SELECT * FROM task_events WHERE task_id = ? ORDER BY id").all(taskId) as Row[];
+    return rows.map((r) => ({
+      id: r.id as number,
+      taskId: r.task_id as number,
+      kind: r.kind as TaskEvent["kind"],
+      detail: r.detail as string,
+      createdAt: r.created_at as string,
+    }));
+  }
+
   setAgentState(taskId: number, state: AgentState): Task {
+    if (state === "failed" && this.getTask(taskId).agentState !== "failed") this.logEvent(taskId, "failed");
     this.db.prepare("UPDATE tasks SET agent_state = ?, updated_at = ? WHERE id = ?").run(state, now(), taskId);
     return this.getTask(taskId);
   }
 
   setNeedsInput(taskId: number, needsInput: boolean): Task {
+    if (needsInput && !this.getTask(taskId).needsInput) this.logEvent(taskId, "needs_you");
     this.db
       .prepare("UPDATE tasks SET needs_input = ?, updated_at = ? WHERE id = ?")
       .run(needsInput ? 1 : 0, now(), taskId);

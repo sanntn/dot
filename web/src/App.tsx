@@ -1,5 +1,5 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
+import { Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -21,6 +21,8 @@ import { Board } from "./Board.tsx";
 import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
 import { applyMove } from "./move.ts";
+import { useNeedsYouNotifications } from "./notifications.ts";
+import { PreferencesDialog } from "./PreferencesDialog.tsx";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { TaskDialog } from "./TaskDialog.tsx";
 import { TaskSheet } from "./TaskSheet.tsx";
@@ -35,6 +37,7 @@ type OpenDialog =
   | { kind: "shortcuts" }
   | { kind: "command" }
   | { kind: "all-projects" }
+  | { kind: "preferences" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
 
@@ -145,6 +148,8 @@ export function App() {
   useEffect(() => {
     document.title = waiting > 0 ? `(${waiting}) Dot` : "Dot";
   }, [waiting]);
+
+  useNeedsYouNotifications(tasks, (task) => setDialog({ kind: "task", taskId: task.id }));
 
   const openNewTask = useCallback(() => setDialog({ kind: "new-task" }), []);
   const openShortcuts = useCallback(() => setDialog({ kind: "shortcuts" }), []);
@@ -299,6 +304,10 @@ export function App() {
               <FolderPlus aria-hidden="true" />
               New project
             </Button>
+            <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "preferences" })}>
+              <Bell aria-hidden="true" />
+              Preferences
+            </Button>
             {project && (
               <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "project", project })}>
                 <Settings aria-hidden="true" />
@@ -352,6 +361,7 @@ export function App() {
       {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} tasks={tasks} onClose={closeDialog} onError={setError} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
+      {dialog?.kind === "preferences" && <PreferencesDialog projectId={projectId} onClose={closeDialog} />}
       {dialog?.kind === "all-projects" && projects && (
         <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
       )}

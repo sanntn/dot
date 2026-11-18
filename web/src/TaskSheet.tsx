@@ -344,7 +344,7 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
             <PlanPanel task={task} artifact={plan} />
           </TabsContent>
           <TabsContent value="activity" className="min-h-0 flex-1 overflow-y-auto">
-            <ActivityPanel runs={runs} messages={messages} />
+            <ActivityPanel taskId={task.id} runs={runs} messages={messages} />
           </TabsContent>
           <TabsContent value="details" forceMount className="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
             <TaskDetails task={task} onDeleted={() => setOpen(false)} />

@@ -20,6 +20,7 @@ import type {
   TaskInput,
   TaskMove,
   TaskPatch,
+  TaskEvent,
   TaskTemplate,
   TemplateInput,
 } from "@dot/shared";
@@ -86,6 +87,7 @@ export const api = {
 
   startTask: (id: number) => request<Task>(`/tasks/${id}/start`, "POST"),
   stopTask: (id: number) => request<void>(`/tasks/${id}/stop`, "POST"),
+  listEvents: (id: number) => request<TaskEvent[]>(`/tasks/${id}/events`),
   listRuns: (id: number) => request<Run[]>(`/tasks/${id}/runs`),
   listMessages: (id: number, after = 0) =>
     request<ChatMessage[]>(`/tasks/${id}/messages${after > 0 ? `?after=${after}` : ""}`),
