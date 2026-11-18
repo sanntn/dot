@@ -344,6 +344,17 @@ function MessageView(props: {
     );
   }
 
+  if (m.kind === "status" && m.text.includes(String.fromCharCode(10))) {
+    // A longer status, such as the project check results, reads as a block.
+    return (
+      <div className="rounded-lg border p-3">
+        <ClampedProse className="text-xs text-muted-foreground" maxHeight={160}>
+          {m.text}
+        </ClampedProse>
+      </div>
+    );
+  }
+
   if (m.kind === "status") {
     return <p className="text-center text-xs text-muted-foreground">{m.text}</p>;
   }

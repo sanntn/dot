@@ -1,4 +1,5 @@
 import type { ExecutionArtifact, Plan, Project, ReviewIssue, Task } from "@dot/shared";
+import { checksSummary, type CheckResult } from "../checks.ts";
 import { planMarkdown } from "./executor.ts";
 import { RESEARCHER_ALLOWED_TOOLS, RESEARCHER_DENIED_TOOLS } from "./researcher.ts";
 
@@ -47,6 +48,20 @@ In a later round you get the executor's fixes. Review the whole change again, no
 The user may chat with you. Answer their questions.
 `.trim();
 
+// What Dot's own run of the project commands found. Empty when none ran.
+export function checksNote(checks: CheckResult[] | undefined): string {
+  if (!checks || checks.length === 0) return "";
+  const failed = checks.some((c) => !c.ok);
+  return [
+    failed
+      ? "Before your review Dot ran the project commands in the worktree, and some failed. A failing command is a blocking issue unless it also fails on the base branch."
+      : "Before your review Dot ran the project commands in the worktree, and they all passed. You do not need to run them again unless you suspect a flaky result.",
+    "",
+    checksSummary(checks),
+    "",
+  ].join("\n");
+}
+
 export function reviewerBrief(
   task: Task,
   project: Project,
@@ -55,6 +70,7 @@ export function reviewerBrief(
   report: ExecutionArtifact,
   round: number,
   baseRef: string,
+  checks?: CheckResult[],
 ): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
@@ -83,12 +99,13 @@ export function reviewerBrief(
     r.deviations.length > 0 ? `\nDeviations from the plan:\n${r.deviations.map((d) => `- ${d}`).join("\n")}` : "",
     `\nCommits:\n${report.commits.map((c) => `- ${c.hash} ${c.subject}`).join("\n")}`,
     "",
+    checksNote(checks),
     "Review the work and call submit_review.",
   ].join("\n");
 }
 
 // What the reviewer gets in later rounds, in its existing session.
-export function reviewerFollowUp(report: ExecutionArtifact, round: number, base: string): string {
+export function reviewerFollowUp(report: ExecutionArtifact, round: number, base: string, checks?: CheckResult[]): string {
   const fixes = report.report.fixes ?? [];
   return [
     `Review round ${round}. The executor addressed your issues and submitted a new report.`,
@@ -97,6 +114,7 @@ export function reviewerFollowUp(report: ExecutionArtifact, round: number, base:
     fixes.length > 0 ? `\nFixes:\n${fixes.map((f) => `- ${f}`).join("\n")}` : "",
     `\nCommits on the branch now:\n${report.commits.map((c) => `- ${c.hash} ${c.subject}`).join("\n")}`,
     "",
+    checksNote(checks),
     `Review the whole change again (git diff ${base}...HEAD), rerun the checks, and call submit_review.`,
   ].join("\n");
 }

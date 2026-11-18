@@ -36,6 +36,7 @@ import {
   reviewerBrief,
   reviewerFollowUp,
 } from "./agents/reviewer.ts";
+import { checkCommands, checksSummary, runChecks, type CheckResult } from "./checks.ts";
 import { HttpError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
 import { trustedOrigin } from "./githost.ts";
@@ -67,6 +68,8 @@ export type OrchestratorConfig = {
   stuckAfterMs?: number;
   // How often the check runs.
   stuckCheckMs?: number;
+  // Longest a single project check may run. Defaults to 10 minutes.
+  checkTimeoutMs?: number;
 };
 
 // The column a stage's agent works in. Outside it, the agent is only chatting.
@@ -358,8 +361,18 @@ export class Orchestrator {
     // The reviewer diffs against the same base the executor's branch started from.
     this.starting.add(taskId);
     let baseRef: string;
+    let checks: CheckResult[] = [];
     try {
       baseRef = await resolveBaseRef(project.repoPath, project.baseBranch);
+      // The project's own commands run first, so the reviewer starts from known results.
+      if (task.worktreePath && existsSync(task.worktreePath) && checkCommands(project).length > 0) {
+        checks = await this.runProjectChecks(task, project);
+        if (this.store.getTask(taskId).column !== "review") return this.store.getTask(taskId);
+        if (checks.some((c) => !c.ok) && !this.checksFixed.has(taskId) && this.sendChecksBack(taskId, checks)) {
+          return this.store.getTask(taskId);
+        }
+        if (checks.every((c) => c.ok)) this.checksFixed.delete(taskId);
+      }
     } finally {
       this.starting.delete(taskId);
     }
@@ -368,11 +381,78 @@ export class Orchestrator {
     const run = existing ?? this.store.createRun(taskId, "review", randomUUID());
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `Review round ${round} started.` });
     const prompt = run.sessionStarted
-      ? reviewerFollowUp(report, round, baseRef)
-      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef);
+      ? reviewerFollowUp(report, round, baseRef, checks)
+      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef, checks);
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
+  }
+
+  // Tasks whose failed checks already went back to the executor once. A second failure goes to the
+  // reviewer as evidence, so the pair cannot loop on a check that never passes.
+  private readonly checksFixed = new Set<number>();
+
+  // Runs the project's test, lint and typecheck commands in the task's worktree and posts the results.
+  private async runProjectChecks(task: Task, project: Project): Promise<CheckResult[]> {
+    const names = checkCommands(project).map((c) => c.name).join(", ");
+    this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: `Running the project checks (${names}) before the review.` });
+    this.store.setAgentState(task.id, "running");
+    this.publish(task.id);
+
+    const before = await snapshotRefs(project.repoPath).catch(() => null);
+    let results: CheckResult[];
+    try {
+      results = await runChecks(project, task.worktreePath!, this.config.checkTimeoutMs);
+    } finally {
+      this.store.setAgentState(task.id, "idle");
+    }
+    const after = before ? await snapshotRefs(project.repoPath).catch(() => null) : null;
+
+    this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: `Project checks:
+
+${checksSummary(results)}` });
+    if (before && after && task.branch) {
+      const changes = refChanges(before, after, [task.branch, ...this.store.listTaskBranches(project.id)]);
+      if (changes.length > 0) {
+        this.store.setNeedsInput(task.id, true);
+        this.store.addMessage({
+          taskId: task.id,
+          runId: null,
+          role: "system",
+          kind: "error",
+          text:
+            `While the project checks ran, the repository changed outside the task branch ${task.branch}. ` +
+            `If you didn't make these changes yourself, check them and undo what you don't want:\n\n` +
+            changes.map((c) => `- ${c}`).join("\n"),
+        });
+      }
+    }
+    this.publish(task.id);
+    return results;
+  }
+
+  // Failed checks go back to the executor before a reviewer spends anything on them.
+  private sendChecksBack(taskId: number, checks: CheckResult[]): boolean {
+    const executor = this.store.latestRun(taskId, "execute");
+    if (!executor) return false;
+    this.checksFixed.add(taskId);
+    this.store.moveTask(taskId, { column: "execute", beforeTaskId: null });
+    this.store.setNeedsInput(taskId, false);
+    this.store.addMessage({
+      taskId,
+      runId: executor.id,
+      role: "system",
+      kind: "status",
+      text: "Some project checks failed, so the task goes back to the executor before the review.",
+    });
+    const prompt = [
+      "Dot ran the project commands after your report, and some failed. Fix the failures, commit, and call submit_execution_report again.",
+      "",
+      checksSummary(checks.filter((c) => !c.ok)),
+    ].join("\n");
+    this.dispatch(executor.id, [{ type: "text", text: prompt }], true);
+    this.publish(taskId);
+    return true;
   }
 
   // Your override in Review: accept the change without (another) agent review.

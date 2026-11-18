@@ -259,6 +259,33 @@ test("an agent that goes silent mid-turn is stopped and flagged", async () => {
   assert.ok(h.store.listMessages(h.task.id).some((m) => /sent nothing for/.test(m.text)));
 });
 
+test("failed project checks go back to the executor once, and the reviewer sees the passing run", async () => {
+  const h = await harness([
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
+    { turns: [[{ commit: { file: "hello.txt", content: "wrong\n", message: "Add hello.txt" } }, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+  // Passes only when hello.txt says hello.
+  h.store.updateProject(h.task.projectId, {
+    testCommand: `node -e "process.exit(require('fs').readFileSync('hello.txt','utf8').trim()==='hello'?0:1)"`,
+  });
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", h.inColumn("plan_review"));
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("merge approval", h.inColumn("merge_approval"));
+
+  const prompts = h.calls().filter((c) => "prompt" in c).map((c) => String(c.prompt));
+  assert.equal(prompts.length, 4);
+  assert.match(prompts[2]!, /some failed/);
+  assert.match(prompts[2]!, /test: failed/);
+  assert.match(prompts[3]!, /they all passed/);
+  const notes = h.store.listMessages(h.task.id).map((m) => m.text);
+  assert.ok(notes.some((t) => /goes back to the executor before the review/.test(t)));
+  await h.until("the reviewer to exit", (t) => t.agentState === "idle");
+});
+
 test("a reviewer that requests changes sends the task back to the executor", async () => {
   const h = await harness([
     { turns: [[{ tool: "submit_plan", args: plan }]] },
