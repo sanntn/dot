@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { Project } from "@dot/shared";
 import { asAgent } from "./isolation.ts";
 
@@ -33,36 +33,73 @@ function plainEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC_|DOT_)/.test(key)));
 }
 
-function runOne(name: CheckResult["name"], command: string, cwd: string, timeoutMs: number): Promise<CheckResult> {
+// Kills the command and everything it started. Killing only the shell would leave the real command
+// running with the output pipes open.
+function killTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    else process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+// Colour codes from test runners are noise in a prompt.
+const ANSI = new RegExp(String.fromCharCode(27) + "\\[[0-9;]*[A-Za-z]", "g");
+
+// How long to wait for the output pipes to close after the kill, before giving up on them.
+const KILL_GRACE_MS = 1000;
+
+function runOne(
+  name: CheckResult["name"],
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<CheckResult> {
   const started = Date.now();
   return new Promise((resolve) => {
     const [bin, args] = asAgent("sh", ["-c", command]);
     // Without isolation the command runs through the platform's own shell, as an agent's Bash tool would.
-    const child =
-      bin === "sh" ? spawn(command, { cwd, env: plainEnv(), shell: true, windowsHide: true }) : spawn(bin, args, { cwd, env: plainEnv(), windowsHide: true });
+    // On POSIX it leads its own process group, so the kill reaches everything it started.
+    const options = { cwd, env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" };
+    const child = bin === "sh" ? spawn(command, { ...options, shell: true }) : spawn(bin, args, options);
     let output = "";
     let timedOut = false;
+    let done = false;
     const take = (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-OUTPUT_LIMIT * 2);
     };
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
+
     const finish = (exitCode: number | null) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
       resolve({
         name,
         command,
         ok: exitCode === 0 && !timedOut,
         timedOut,
         exitCode,
-        output: output.slice(-OUTPUT_LIMIT).trim(),
+        output: output.replace(ANSI, "").slice(-OUTPUT_LIMIT).trim(),
         seconds: Math.round((Date.now() - started) / 100) / 10,
       });
     };
+    const stop = () => {
+      killTree(child);
+      setTimeout(() => finish(null), KILL_GRACE_MS).unref();
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
+    }, timeoutMs);
+    if (signal?.aborted) stop();
+    else signal?.addEventListener("abort", stop, { once: true });
+
     child.on("error", (err) => {
       output += `\n${err.message}`;
       finish(null);
@@ -71,10 +108,18 @@ function runOne(name: CheckResult["name"], command: string, cwd: string, timeout
   });
 }
 
-// One after another, so two commands never fight over the same files.
-export async function runChecks(project: Project, cwd: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CheckResult[]> {
+// One after another, so two commands never fight over the same files. An aborted run stops at once.
+export async function runChecks(
+  project: Project,
+  cwd: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
-  for (const { name, command } of checkCommands(project)) results.push(await runOne(name, command, cwd, timeoutMs));
+  for (const { name, command } of checkCommands(project)) {
+    if (signal?.aborted) break;
+    results.push(await runOne(name, command, cwd, timeoutMs, signal));
+  }
   return results;
 }
 

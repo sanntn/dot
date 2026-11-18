@@ -366,8 +366,10 @@ export class Orchestrator {
       baseRef = await resolveBaseRef(project.repoPath, project.baseBranch);
       // The project's own commands run first, so the reviewer starts from known results.
       if (task.worktreePath && existsSync(task.worktreePath) && checkCommands(project).length > 0) {
-        checks = await this.runProjectChecks(task, project);
-        if (this.store.getTask(taskId).column !== "review") return this.store.getTask(taskId);
+        const ran = await this.runProjectChecks(task, project);
+        // Stopped, or moved on by you while the commands ran. No reviewer starts.
+        if (ran === null || this.store.getTask(taskId).column !== "review") return this.store.getTask(taskId);
+        checks = ran;
         if (checks.some((c) => !c.ok) && !this.checksFixed.has(taskId) && this.sendChecksBack(taskId, checks)) {
           return this.store.getTask(taskId);
         }
@@ -391,20 +393,31 @@ export class Orchestrator {
   // Tasks whose failed checks already went back to the executor once. A second failure goes to the
   // reviewer as evidence, so the pair cannot loop on a check that never passes.
   private readonly checksFixed = new Set<number>();
+  // The project checks running for a task, so Stop can end them.
+  private readonly checkAborts = new Map<number, AbortController>();
 
   // Runs the project's test, lint and typecheck commands in the task's worktree and posts the results.
-  private async runProjectChecks(task: Task, project: Project): Promise<CheckResult[]> {
+  // Null when a Stop ended the run.
+  private async runProjectChecks(task: Task, project: Project): Promise<CheckResult[] | null> {
     const names = checkCommands(project).map((c) => c.name).join(", ");
     this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: `Running the project checks (${names}) before the review.` });
     this.store.setAgentState(task.id, "running");
     this.publish(task.id);
 
     const before = await snapshotRefs(project.repoPath).catch(() => null);
+    const abort = new AbortController();
+    this.checkAborts.set(task.id, abort);
     let results: CheckResult[];
     try {
-      results = await runChecks(project, task.worktreePath!, this.config.checkTimeoutMs);
+      results = await runChecks(project, task.worktreePath!, this.config.checkTimeoutMs, abort.signal);
     } finally {
+      this.checkAborts.delete(task.id);
       this.store.setAgentState(task.id, "idle");
+    }
+    if (abort.signal.aborted) {
+      this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: "Stopped the project checks." });
+      this.publish(task.id);
+      return null;
     }
     const after = before ? await snapshotRefs(project.repoPath).catch(() => null) : null;
 
@@ -492,6 +505,7 @@ ${checksSummary(results)}` });
   // Removes a task's worktree folder before the task is deleted. The branch stays in the repo.
   // Call after stop() has resolved: on Windows a running process keeps its folder locked.
   async cleanupWorkspace(taskId: number): Promise<void> {
+    this.checksFixed.delete(taskId);
     const task = this.store.getTask(taskId);
     if (!task.worktreePath) return;
     const project = this.store.getProject(task.projectId);
@@ -527,6 +541,7 @@ ${checksSummary(results)}` });
   async stop(taskId: number): Promise<void> {
     // A running merge stops at its next step. Host API calls already sent still finish.
     this.mergeStep.abort(taskId);
+    this.checkAborts.get(taskId)?.abort();
     const exits: Promise<void>[] = [];
     for (const live of this.live.values()) {
       if (live.taskId !== taskId) continue;
@@ -938,7 +953,8 @@ ${checksSummary(results)}` });
   // moves the checkpoint up, so resuming the task grants another budget's worth. A stage that has
   // already handed in its result is left alone, since it is about to finish anyway.
   private enforceBudget(live: Live, task: Task): void {
-    if (live.stopped || live.outcome) return;
+    // Only a turn the stage still needs an outcome from. A chat turn after the stage finished is not paused.
+    if (live.stopped || live.outcome || !live.expectOutcome) return;
     const budget = this.store.getProject(task.projectId).taskBudgetUsd;
     if (budget === null) return;
     const checkpoint = this.store.budgetCheckpoint(task.id);
