@@ -253,6 +253,14 @@ export type TaskMove = z.infer<typeof TaskMoveSchema>;
 
 // The researcher's output. The reviewer later checks the work against acceptanceCriteria.
 export const PlanSchema = z.object({
+  headline: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .describe(
+      "What this plan does and the one thing the user should check. One plain sentence, under 160 characters. The board shows it first.",
+    ),
   goal: z.string().trim().min(1).describe("One or two sentences: what done looks like."),
   context: z
     .string()
@@ -282,6 +290,14 @@ export type PlanArtifact = {
 
 // The executor's output. Dot adds the commits itself from git, so the agent can't misreport them.
 export const ExecutionReportSchema = z.object({
+  headline: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .describe(
+      "What you built and whether anything needs the user. One plain sentence, under 160 characters. The board shows it first.",
+    ),
   summary: z.string().trim().min(1).describe("What you built, in a few sentences."),
   deviations: z
     .array(z.string().trim().min(1))
@@ -323,6 +339,14 @@ const CheckSchema = z.object({
 export const ReviewSchema = z
   .object({
     verdict: z.enum(["approve", "changes_requested"]),
+    headline: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .describe(
+        "The verdict and the reason, for example the blocking problem. One plain sentence, under 160 characters. The board shows it first.",
+      ),
     summary: z.string().trim().min(1).describe("Your overall assessment in a few sentences."),
     criteria: z
       .array(
@@ -469,3 +493,17 @@ export type BoardEvent =
   // taskId is set when one task changed, so an open task panel can ignore the others.
   | { type: "tasks.changed"; projectId: number; taskId?: number }
   | { type: "messages.changed"; taskId: number };
+
+// Artifacts saved before the headline field existed have none. Fall back to the first sentence of the
+// text that sums them up, so every panel can show something short.
+export function firstSentence(text: string, max = 160): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const end = clean.search(/[.!?](\s|$)/);
+  const sentence = end === -1 ? clean : clean.slice(0, end + 1);
+  return sentence.length > max ? `${sentence.slice(0, max - 3).trimEnd()}...` : sentence;
+}
+// The type says a headline is always there, but rows saved earlier have none.
+type MaybeHeadline = { headline?: string };
+export const planHeadline = (plan: Plan & MaybeHeadline) => plan.headline?.trim() || firstSentence(plan.goal);
+export const reportHeadline = (report: ExecutionReport & MaybeHeadline) => report.headline?.trim() || firstSentence(report.summary);
+export const reviewHeadline = (review: Review & MaybeHeadline) => review.headline?.trim() || firstSentence(review.summary);

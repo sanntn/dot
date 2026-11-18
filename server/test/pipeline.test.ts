@@ -24,6 +24,7 @@ type Step = { say: string } | { tool: string; args?: unknown } | { commit: { fil
 type Launch = { name?: string; turns: Step[][] };
 
 const plan = {
+  headline: "Create hello.txt with a greeting.",
   goal: "Add a greeting file.",
   context: "The repo is empty apart from a readme.",
   acceptanceCriteria: ["hello.txt exists and says hello"],
@@ -33,9 +34,10 @@ const plan = {
   risks: [],
   assumptions: [],
 };
-const report = { summary: "Added hello.txt.", deviations: [], verification: [], followUps: [] };
+const report = { headline: "Added hello.txt.", summary: "Added hello.txt.", deviations: [], verification: [], followUps: [] };
 const review = (verdict: "approve" | "changes_requested") => ({
   verdict,
+  headline: verdict === "approve" ? "Approved: hello.txt is right." : "Wrong text in hello.txt.",
   summary: verdict === "approve" ? "Looks right." : "One problem.",
   criteria: [{ criterion: plan.acceptanceCriteria[0], status: verdict === "approve" ? "met" : "not_met", evidence: "Read the file." }],
   issues: verdict === "approve" ? [] : [{ severity: "blocking", title: "Wrong text", details: "It should say hello." }],

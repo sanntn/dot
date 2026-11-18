@@ -70,7 +70,7 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
           runId,
           role: "agent",
           kind: "plan",
-          text: `Submitted plan v${saved.version}.`,
+          text: `Submitted plan v${saved.version}: ${plan.headline}`,
           data: { planVersion: saved.version },
         });
         if (task.column === "research") store.moveTask(task.id, { column: "plan_review", beforeTaskId: null });
@@ -118,7 +118,7 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
           runId,
           role: "agent",
           kind: "report",
-          text: `Submitted the execution report (${commits.length} commit${commits.length === 1 ? "" : "s"}).`,
+          text: `Submitted the execution report (${commits.length} commit${commits.length === 1 ? "" : "s"}): ${report.headline}`,
           data: { reportVersion: saved.version },
         });
         store.moveTask(task.id, { column: "review", beforeTaskId: null });
@@ -173,7 +173,7 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
             runId,
             role: "agent",
             kind: "review",
-            text: `Approved in round ${round}.`,
+            text: `Approved in round ${round}: ${review.headline}`,
             data: { reviewVersion: saved.version },
           });
           store.moveTask(task.id, { column: "merge_approval", beforeTaskId: null });
@@ -186,7 +186,7 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
           runId,
           role: "agent",
           kind: "review",
-          text: `Requested changes in round ${round}: ${blocking.length} blocking issue${blocking.length === 1 ? "" : "s"}.`,
+          text: `Requested changes in round ${round}: ${review.headline}`,
           data: { reviewVersion: saved.version },
         });
 

@@ -39,6 +39,7 @@ How to work:
   optional, such as style, naming, small cleanups or follow-up ideas. Don't block on taste.
 - Call submit_review. The verdict is approve when there are no blocking issues, and changes_requested when there
   is at least one. Blocking issues go back to the executor, which fixes them in another round.
+  Give the review a headline: one plain sentence with the verdict and the reason. The board shows it first.
 - After submit_review succeeds, end your turn with a short summary.
 - Use ask_human only when the plan itself is ambiguous in a way you can't judge.
 

@@ -1,4 +1,4 @@
-import type { DiffFile, ExecutionArtifact, Task, TaskDiff } from "@dot/shared";
+import { reportHeadline, type DiffFile, type ExecutionArtifact, type Task, type TaskDiff } from "@dot/shared";
 import { ChevronRight, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCommitHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { api, errorMessage } from "./api.ts";
 import { serialLoader } from "./events.ts";
-import { ClampedProse, MoreDetails } from "./detail.tsx";
+import { ClampedProse, Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 // The executor's report, the branch's commits and its diff against the base branch.
@@ -130,7 +130,10 @@ function ReportView({ artifact }: { artifact: ExecutionArtifact }) {
     <section className="flex min-w-0 flex-col gap-4">
       <div className="flex min-w-0 flex-col gap-2">
         <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Execution report</h3>
-        <ClampedProse className="text-sm">{report.summary}</ClampedProse>
+        <Headline>{reportHeadline(report)}</Headline>
+        <ClampedProse className="text-sm text-muted-foreground" maxHeight={96}>
+          {report.summary}
+        </ClampedProse>
       </div>
 
       <Bullets title="Deviations from the plan" items={report.deviations} />

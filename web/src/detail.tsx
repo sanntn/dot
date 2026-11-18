@@ -98,3 +98,8 @@ export function ClampedProse({ children, className, maxHeight = 176 }: { childre
     </div>
   );
 }
+
+// The one-sentence point of a plan, report or review. It leads the panel.
+export function Headline({ children }: { children: string }) {
+  return <p className="text-base leading-snug font-medium text-balance">{children}</p>;
+}

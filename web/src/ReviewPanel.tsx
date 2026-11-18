@@ -1,4 +1,4 @@
-import { type ReviewArtifact, type ReviewIssue, type Task } from "@dot/shared";
+import { reviewHeadline, type ReviewArtifact, type ReviewIssue, type Task } from "@dot/shared";
 import { Check, CircleCheck, CircleHelp, CircleX, CornerUpLeft, Plus } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
 import { CheckIcon } from "./ChangesPanel.tsx";
-import { ClampedProse, MoreDetails } from "./detail.tsx";
+import { ClampedProse, Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 export function ReviewPanel({ task, artifact, working }: { task: Task; artifact: ReviewArtifact | null; working: boolean }) {
@@ -67,7 +67,10 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
               </span>
             </div>
 
-            <Prose className="text-sm">{artifact.review.summary}</Prose>
+            <Headline>{reviewHeadline(artifact.review)}</Headline>
+            <ClampedProse className="text-sm text-muted-foreground" maxHeight={96}>
+              {artifact.review.summary}
+            </ClampedProse>
 
             {allMet ? (
               <p className="flex items-center gap-2 text-sm">

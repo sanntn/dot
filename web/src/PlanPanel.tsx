@@ -1,4 +1,4 @@
-import type { Plan, PlanArtifact, Task } from "@dot/shared";
+import { planHeadline, type Plan, type PlanArtifact, type Task } from "@dot/shared";
 import { Check, CornerUpLeft, Pencil } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
-import { MoreDetails } from "./detail.tsx";
+import { Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 // What the fold holds, so you can tell whether it is worth opening.
@@ -85,6 +85,7 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
         </div>
 
         <div className="grid gap-6">
+          <Headline>{planHeadline(plan)}</Headline>
           <Section title="Goal">
             <Prose className="text-sm">{plan.goal}</Prose>
           </Section>
@@ -237,6 +238,7 @@ function PlanEditor(props: {
     const form = new FormData(e.currentTarget);
     const get = (name: string) => String(form.get(name) ?? "");
     props.onSave({
+      headline: get("headline").trim() || planHeadline(plan),
       goal: get("goal").trim(),
       context: get("context"),
       acceptanceCriteria: lines(get("acceptanceCriteria")),
@@ -264,6 +266,7 @@ function PlanEditor(props: {
   return (
     <form className="flex min-h-0 flex-1 flex-col" onSubmit={onSubmit}>
       <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-4">
+        {field("headline", "Headline", planHeadline(plan), "One sentence. It leads the plan.", 2)}
         {field("goal", "Goal", plan.goal, undefined, 2)}
         {field("acceptanceCriteria", "Acceptance criteria", plan.acceptanceCriteria.join("\n"), "One per line.")}
         {field("context", "Context", plan.context, undefined, 6)}

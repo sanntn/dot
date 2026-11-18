@@ -48,6 +48,7 @@ How to work:
 - Do not ask about things you can find out from the repository.
 - When you know enough, call submit_plan. Acceptance criteria must be concrete and checkable.
   List every decision you made without asking under assumptions, so the user can review them.
+  Give the plan a headline: one plain sentence saying what it does and the one thing to check. The board shows it first.
 - After submit_plan succeeds, end your turn with a short summary of the plan.
 
 The user may chat with you later, including after the plan is approved. Answer their questions.
