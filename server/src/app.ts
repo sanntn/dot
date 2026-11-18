@@ -7,6 +7,10 @@ import {
   ClaudeAccountQuerySchema,
   RemoteQuerySchema,
   IMAGE_TYPES,
+  LANES,
+  laneOf,
+  type Lane,
+  type ProjectOverview,
   MAX_IMAGE_BYTES,
   MergeSchema,
   PlanUpdateSchema,
@@ -345,6 +349,23 @@ export function createApp(
   app.post("/repo-remote", async (c) => {
     const { repoPath } = await parseBody(c, RemoteQuerySchema);
     return c.json(await detectRemote(checkRepoPath(repoPath)));
+  });
+
+  // Lane counts for every project, for the All projects view.
+  app.get("/overview", (c) => {
+    const overview: ProjectOverview[] = store.listProjects().map((project) => {
+      const lanes = Object.fromEntries(LANES.map((l) => [l, 0])) as Record<Lane, number>;
+      const waiting: ProjectOverview["waiting"] = [];
+      let running = 0;
+      for (const task of store.listTasks(project.id)) {
+        const lane = laneOf(task);
+        lanes[lane] += 1;
+        if (task.agentState === "running") running += 1;
+        if (lane === "needs_you" && waiting.length < 3) waiting.push({ id: task.id, number: task.number, title: task.title });
+      }
+      return { projectId: project.id, lanes, running, waiting };
+    });
+    return c.json(overview);
   });
 
   app.get("/projects/:id/tasks", (c) => c.json(store.listTasks(idParam(c))));

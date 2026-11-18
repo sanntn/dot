@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ActivityPanel } from "./ActivityPanel.tsx";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { api, errorMessage } from "./api.ts";
 import { cn } from "@/lib/utils";
@@ -31,7 +32,7 @@ import { PlanPanel } from "./PlanPanel.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { TaskFields } from "./TaskDialog.tsx";
 
-type Tab = "chat" | "plan" | "changes" | "review" | "details";
+type Tab = "chat" | "plan" | "changes" | "review" | "activity" | "details";
 
 // Which agent belongs to a column. Columns without an agent map to nothing.
 const COLUMN_STAGE: Partial<Record<Column, AgentStage>> = {
@@ -298,6 +299,7 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
             <TabsTrigger value="plan">Plan{plan ? ` v${plan.version}` : ""}</TabsTrigger>
             {task.branch && <TabsTrigger value="changes">Changes</TabsTrigger>}
             {showReviewTab && <TabsTrigger value="review">Review{review ? ` ${review.version}` : ""}</TabsTrigger>}
+            <TabsTrigger value="activity">Activity</TabsTrigger>
             <TabsTrigger value="details">Details</TabsTrigger>
           </TabsList>
           {/* forceMount keeps each tab alive while hidden, so a half-written message or plan edit survives a tab switch. */}
@@ -340,6 +342,9 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
           </TabsContent>
           <TabsContent value="plan" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
             <PlanPanel task={task} artifact={plan} />
+          </TabsContent>
+          <TabsContent value="activity" className="min-h-0 flex-1 overflow-y-auto">
+            <ActivityPanel runs={runs} messages={messages} />
           </TabsContent>
           <TabsContent value="details" forceMount className="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
             <TaskDetails task={task} onDeleted={() => setOpen(false)} />

@@ -1,5 +1,5 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Ellipsis, FolderGit2, FolderPlus, Plus, Search, Settings, X } from "lucide-react";
+import { Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, errorMessage } from "./api.ts";
+import { AllProjectsDialog } from "./AllProjectsDialog.tsx";
 import { Board } from "./Board.tsx";
 import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
@@ -33,6 +34,7 @@ type OpenDialog =
   | { kind: "task"; taskId: number }
   | { kind: "shortcuts" }
   | { kind: "command" }
+  | { kind: "all-projects" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
 
@@ -287,6 +289,12 @@ export function App() {
           </PopoverTrigger>
           <PopoverContent className="w-72 p-0" align="end">
             <div className="grid gap-0.5 p-1">
+            {projects && projects.length > 1 && (
+              <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "all-projects" })}>
+                <LayoutGrid aria-hidden="true" />
+                All projects
+              </Button>
+            )}
             <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
               <FolderPlus aria-hidden="true" />
               New project
@@ -344,6 +352,9 @@ export function App() {
       {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} onClose={closeDialog} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
+      {dialog?.kind === "all-projects" && projects && (
+        <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
+      )}
       {dialog?.kind === "command" && (
         <CommandMenu
           onClose={closeDialog}
@@ -353,6 +364,7 @@ export function App() {
             projectId,
             newTask: project ? openNewTask : null,
             shortcuts: openShortcuts,
+            allProjects: () => setDialog({ kind: "all-projects" }),
             openTask: (task) => setDialog({ kind: "task", taskId: task.id }),
             selectProject,
           })}

@@ -1,8 +1,6 @@
-import type { Column, Task } from "@dot/shared";
+import { LANES, laneOf, type Column, type Lane, type Task } from "@dot/shared";
 
-// The board shows four lanes. Each lane groups the pipeline columns that mean the same thing to the person watching.
-export const LANES = ["inbox", "working", "needs_you", "done"] as const;
-export type Lane = (typeof LANES)[number];
+export { LANES, laneOf, type Lane };
 
 export const LANE_LABELS: Record<Lane, string> = {
   inbox: "Inbox",
@@ -18,15 +16,6 @@ export const LANE_ENTRY: Record<Lane, Column> = {
   needs_you: "plan_review",
   done: "done",
 };
-
-// A task waits for you at plan review, at merge approval, or whenever its agent has a question or failed.
-export function laneOf(task: Task): Lane {
-  if (task.column === "inbox") return "inbox";
-  if (task.column === "done") return "done";
-  if (task.column === "plan_review" || task.column === "merge_approval") return "needs_you";
-  if (task.needsInput || task.agentState === "failed") return "needs_you";
-  return "working";
-}
 
 // The pipeline condensed to four steps for the card's progress bar.
 export const STEPS = ["Research", "Execute", "Review", "Merge"] as const;

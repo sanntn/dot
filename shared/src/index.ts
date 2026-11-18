@@ -182,6 +182,27 @@ export const TaskSchema = z.object({
 });
 export type Task = z.infer<typeof TaskSchema>;
 
+// The board shows four lanes. Each groups the pipeline columns that mean the same thing to the person watching.
+export const LANES = ["inbox", "working", "needs_you", "done"] as const;
+export type Lane = (typeof LANES)[number];
+
+// A task waits for you at plan review, at merge approval, or whenever its agent has a question or failed.
+export function laneOf(task: Pick<Task, "column" | "needsInput" | "agentState">): Lane {
+  if (task.column === "inbox") return "inbox";
+  if (task.column === "done") return "done";
+  if (task.column === "plan_review" || task.column === "merge_approval") return "needs_you";
+  if (task.needsInput || task.agentState === "failed") return "needs_you";
+  return "working";
+}
+
+// One row of the All projects view. `waiting` lists the first few tasks that need you.
+export type ProjectOverview = {
+  projectId: number;
+  lanes: Record<Lane, number>;
+  running: number;
+  waiting: { id: number; number: number; title: string }[];
+};
+
 export const TaskInputSchema = z.object({
   projectId: z.number().int().positive(),
   title: z.string().trim().min(1, "Title is required").max(200),
