@@ -46,3 +46,45 @@ export function stepOf(task: Task): { index: number; label: string; total: numbe
   if (index === undefined || label === undefined) return null;
   return { index, label, total: STEPS.length };
 }
+
+// Columns where the server can start an agent. Dot refuses anything else with a 409.
+const STARTABLE: readonly Column[] = ["inbox", "research", "execute", "review"];
+
+export function canRetry(task: Task): boolean {
+  return task.agentState === "failed" && STARTABLE.includes(task.column);
+}
+
+export function canStart(task: Task): boolean {
+  return task.column === "inbox" && task.agentState === "idle";
+}
+
+export function isActive(task: Task): boolean {
+  return task.agentState === "running" || task.agentState === "queued";
+}
+
+// One plain sentence on what the card is waiting for, taken from fields the task already carries.
+export function statusLine(task: Task): string | null {
+  if (task.agentState === "failed") return "The agent stopped with an error";
+  if (task.needsInput) return "The agent asked you a question";
+  if (task.agentState === "queued") return "Waiting for a free agent slot";
+  switch (task.column) {
+    case "research":
+      return task.agentState === "running" ? "Reading the codebase" : null;
+    case "plan_review":
+      return "Plan ready for you to review";
+    case "execute":
+      return task.agentState === "running" ? "Writing code" : null;
+    case "review":
+      return task.agentState === "running"
+        ? `Reviewing, round ${task.reviewRound + 1}`
+        : task.reviewRound > 0
+          ? `Review round ${task.reviewRound} done`
+          : null;
+    case "merge_approval":
+      return "Ready to merge when you approve";
+    case "merge":
+      return "Merging";
+    default:
+      return null;
+  }
+}

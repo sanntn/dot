@@ -1,12 +1,11 @@
 import type { ClaudeUsage, UsageLimit, UsageSpend } from "@dot/shared";
-import { Gauge, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api, errorMessage } from "./api.ts";
 
-// The subscription limits of the account a project runs on, in a popover off the header.
-// The server caches for a minute, so opening it often does not hit Anthropic each time.
+// The subscription limits of the account a project runs on. They sit in the More menu, and the menu's
+// trigger shows a dot when the tightest limit is no longer normal. The server caches the answer.
 
 const REFRESH_MS = 5 * 60_000;
 
@@ -118,19 +117,26 @@ function Body({ usage, now }: { usage: ClaudeUsage; now: number }) {
   );
 }
 
-// The tightest limit decides the trigger's colour and number, so a glance says whether to worry.
-function tightest(usage: ClaudeUsage | null): { percent: number; severity: Severity } | null {
+// The tightest limit decides the dot on the trigger, so a glance says whether to worry.
+export function tightest(usage: ClaudeUsage | null): { percent: number; severity: Severity } | null {
   const items = [...(usage?.limits ?? [])];
   if (items.length === 0) return null;
   const top = items.reduce((a, b) => (b.percent > a.percent ? b : a));
   return { percent: top.percent, severity: top.severity };
 }
 
-export function UsageLimits({ configDir, token }: { configDir: string | null; token: string | null }) {
+export type UsageState = {
+  usage: ClaudeUsage | null;
+  error: string | null;
+  loading: boolean;
+  now: number;
+  load: () => Promise<void>;
+};
+
+export function useClaudeUsage(configDir: string | null, token: string | null, enabled: boolean): UsageState {
   const [usage, setUsage] = useState<ClaudeUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   // Ignore an answer for an account the user has already switched away from.
   const account = `${token ?? ""}|${configDir ?? ""}`;
@@ -154,46 +160,38 @@ export function UsageLimits({ configDir, token }: { configDir: string | null; to
   }, [account, configDir, token]);
 
   useEffect(() => {
+    if (!enabled) return;
     setUsage(null);
     setError(null);
     void load();
     const timer = window.setInterval(() => void load(), REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [load, enabled]);
 
-  const top = tightest(usage);
-  const label = top ? `Claude limits, ${Math.round(top.percent)}% used` : "Claude limits";
+  return { usage, error, loading, now, load };
+}
 
+export function UsageSection({ state }: { state: UsageState }) {
+  const { usage, error, loading, now, load } = state;
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) void load();
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button variant="ghost" aria-label={label} title={label}>
-          <Gauge aria-hidden="true" className={top && top.severity !== "normal" ? textColor[top.severity] : undefined} />
-          {top ? <span className={`tabular-nums ${top.severity !== "normal" ? textColor[top.severity] : ""}`}>{Math.round(top.percent)}%</span> : "Limits"}
+    <section aria-labelledby="usage-heading" className="border-t px-3 pt-3 pb-2">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 id="usage-heading" className="text-sm font-semibold">
+          Claude limits
+        </h2>
+        <Button variant="ghost" size="icon-xs" aria-label="Refresh limits" disabled={loading} onClick={() => void load()}>
+          <RefreshCw aria-hidden="true" className={loading ? "animate-spin" : undefined} />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent>
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold">Claude limits</h2>
-          <Button variant="ghost" size="icon-xs" aria-label="Refresh limits" disabled={loading} onClick={() => void load()}>
-            <RefreshCw aria-hidden="true" className={loading ? "animate-spin" : undefined} />
-          </Button>
-        </div>
-        {usage && <Body usage={usage} now={now} />}
-        {error && <p role="alert" className={`text-sm text-destructive ${usage ? "mt-4" : ""}`}>{error}</p>}
-        {!usage && !error && <p className="text-sm text-muted-foreground">Loading limits</p>}
-        {usage && (
-          <p className="mt-4 text-xs text-muted-foreground">
-            Updated {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(usage.fetchedAt))}
-          </p>
-        )}
-      </PopoverContent>
-    </Popover>
+      </div>
+      {usage && <Body usage={usage} now={now} />}
+      {error && <p role="alert" className={`text-sm text-destructive ${usage ? "mt-3" : ""}`}>{error}</p>}
+      {!usage && !error && <p className="text-sm text-muted-foreground">Loading limits</p>}
+      {usage && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Updated {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(usage.fetchedAt))}
+        </p>
+      )}
+    </section>
   );
 }
+

@@ -9,12 +9,22 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
-import { Check, GripVertical } from "lucide-react";
+import { Check, ExternalLink, GripVertical, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { LANE_ENTRY, LANE_LABELS, LANES, laneOf, stepOf, type Lane } from "./lanes.ts";
+import { LANE_ENTRY, LANE_LABELS, LANES, canRetry, canStart, isActive, laneOf, statusLine, stepOf, type Lane } from "./lanes.ts";
 import { byPosition } from "./move.ts";
 
 // Needs you is the only lane that waits on a person, so it gets the warm dot and tint.
@@ -49,6 +59,9 @@ export function Board(props: {
   tasks: Task[];
   onOpenTask: (task: Task) => void;
   onMove: (task: Task, move: TaskMove) => void;
+  onStart: (task: Task) => void;
+  onStop: (task: Task) => void;
+  onDelete: (task: Task) => void;
   announce: (message: string) => void;
 }) {
   const { tasks, onMove, announce } = props;
@@ -334,6 +347,10 @@ export function Board(props: {
                   dragRect={draggingId === task.id ? dragRect : null}
                   hintId={hintId}
                   onOpen={() => props.onOpenTask(task)}
+                  onStart={() => props.onStart(task)}
+                  onStop={() => props.onStop(task)}
+                  onDelete={() => props.onDelete(task)}
+                  onMoveToLane={(target) => onMove(task, { column: LANE_ENTRY[target], beforeTaskId: null })}
                   onPointerDown={(e) => onPointerDown(e, task)}
                   onPointerMove={onPointerMove}
                   onPointerUp={(e) => onPointerEnd(e, true)}
@@ -364,6 +381,10 @@ function TaskCardSlot(props: {
   dragRect: DOMRect | null;
   hintId: string;
   onOpen: () => void;
+  onStart: () => void;
+  onStop: () => void;
+  onDelete: () => void;
+  onMoveToLane: (lane: Lane) => void;
   onPointerDown: (e: PointerEvent<HTMLButtonElement>) => void;
   onPointerMove: (e: PointerEvent<HTMLButtonElement>) => void;
   onPointerUp: (e: PointerEvent<HTMLButtonElement>) => void;
@@ -373,11 +394,15 @@ function TaskCardSlot(props: {
   const { task } = props;
   const done = task.column === "done";
   const step = done || task.column === "inbox" ? null : stepOf(task);
-  const action = actionLabel(task);
+  const retry = canRetry(task);
+  const action = retry ? "Retry" : actionLabel(task);
+  const status = statusLine(task);
   return (
     <>
       {props.showMarker && <DropMarker />}
       {props.dragRect && <li aria-hidden="true" style={{ height: props.dragRect.height }} />}
+      <ContextMenu>
+      <ContextMenuTrigger asChild>
       <li
         data-task-id={task.id}
         data-column={task.column}
@@ -430,6 +455,9 @@ function TaskCardSlot(props: {
             {!done && task.description && (
               <span className="line-clamp-2 text-xs text-muted-foreground">{task.description}</span>
             )}
+            {status && (
+              <span className={cn("text-xs", retry ? "text-destructive" : "text-muted-foreground")}>{status}</span>
+            )}
           </button>
           {step && (
             <div className="grid gap-1.5">
@@ -457,13 +485,55 @@ function TaskCardSlot(props: {
               <AgentBadge task={task} />
             </span>
             {action && (
-              <Button size="sm" onClick={props.onOpen}>
+              <Button size="sm" variant={retry ? "outline" : "default"} onClick={retry ? props.onStart : props.onOpen}>
+                {retry && <RotateCcw aria-hidden="true" />}
                 {action}
               </Button>
             )}
           </div>
         </div>
       </li>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={props.onOpen}>
+          <ExternalLink aria-hidden="true" />
+          Open
+        </ContextMenuItem>
+        {canStart(task) && (
+          <ContextMenuItem onSelect={props.onStart}>
+            <Play aria-hidden="true" />
+            Start
+          </ContextMenuItem>
+        )}
+        {retry && (
+          <ContextMenuItem onSelect={props.onStart}>
+            <RotateCcw aria-hidden="true" />
+            Retry
+          </ContextMenuItem>
+        )}
+        {isActive(task) && (
+          <ContextMenuItem onSelect={props.onStop}>
+            <Square aria-hidden="true" />
+            Stop
+          </ContextMenuItem>
+        )}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Move to</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {LANES.filter((l) => l !== laneOf(task)).map((l) => (
+              <ContextMenuItem key={l} onSelect={() => props.onMoveToLane(l)}>
+                {LANE_LABELS[l]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem destructive onSelect={props.onDelete}>
+          <Trash2 aria-hidden="true" />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+      </ContextMenu>
     </>
   );
 }

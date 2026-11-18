@@ -1,26 +1,38 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Ellipsis, FolderGit2, FolderPlus, Plus, Settings, X } from "lucide-react";
+import { Ellipsis, FolderGit2, FolderPlus, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, errorMessage } from "./api.ts";
 import { Board } from "./Board.tsx";
+import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
 import { applyMove } from "./move.ts";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { TaskDialog } from "./TaskDialog.tsx";
 import { TaskSheet } from "./TaskSheet.tsx";
-import { laneOf } from "./lanes.ts";
+import { canRetry, laneOf } from "./lanes.ts";
 import { ShortcutsDialog } from "./ShortcutsDialog.tsx";
 import { useShortcuts } from "./shortcuts.ts";
-import { UsageLimits } from "./UsageLimits.tsx";
+import { tightest, UsageSection, useClaudeUsage } from "./UsageLimits.tsx";
 
 type OpenDialog =
   | { kind: "new-task" }
   | { kind: "task"; taskId: number }
   | { kind: "shortcuts" }
+  | { kind: "command" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
 
@@ -134,7 +146,53 @@ export function App() {
 
   const openNewTask = useCallback(() => setDialog({ kind: "new-task" }), []);
   const openShortcuts = useCallback(() => setDialog({ kind: "shortcuts" }), []);
-  useShortcuts({ newTask: project ? openNewTask : null, help: openShortcuts, enabled: dialog === null });
+  const openCommands = useCallback(() => setDialog({ kind: "command" }), []);
+
+  // Board actions. They share one error path, and the board refetches on the server's events.
+  const [deleting, setDeleting] = useState<Task | null>(null);
+  const act = useCallback(async (work: () => Promise<unknown>) => {
+    try {
+      await work();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, []);
+  const startTask = useCallback((task: Task) => act(() => api.startTask(task.id)), [act]);
+  const stopTask = useCallback((task: Task) => act(() => api.stopTask(task.id)), [act]);
+
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const approveFocused = useCallback(
+    (id: number) => {
+      const task = tasksRef.current.find((t) => t.id === id);
+      if (task?.column !== "plan_review") return;
+      void act(() => api.approvePlan(id));
+      announce(`Approved the plan for ${task.title}.`);
+    },
+    [act, announce],
+  );
+  const retryFocused = useCallback(
+    (id: number) => {
+      const task = tasksRef.current.find((t) => t.id === id);
+      if (!task || !canRetry(task)) return;
+      void act(() => api.startTask(id));
+      announce(`Retrying ${task.title}.`);
+    },
+    [act, announce],
+  );
+
+  useShortcuts({
+    newTask: project ? openNewTask : null,
+    help: openShortcuts,
+    search: openCommands,
+    approve: approveFocused,
+    retry: retryFocused,
+    enabled: dialog === null && deleting === null,
+  });
+
+  const usageState = useClaudeUsage(project?.claudeConfigDir ?? null, project?.claudeToken ?? null, project !== null);
+  const worst = tightest(usageState.usage);
+  const usageAlert = worst !== null && worst.severity !== "normal" ? worst : null;
 
   // The panel always shows the live task from the board, so agent progress updates in place.
   const openTask = dialog?.kind === "task" ? (tasks.find((t) => t.id === dialog.taskId) ?? null) : null;
@@ -196,7 +254,10 @@ export function App() {
         )}
 
         <span className="flex-1" />
-        <UsageLimits configDir={project?.claudeConfigDir ?? null} token={project?.claudeToken ?? null} />
+        <Button variant="outline" onClick={openCommands} aria-label="Search and commands, Control K" title="Ctrl K">
+          <Search aria-hidden="true" />
+          <span className="hidden sm:inline">Search</span>
+        </Button>
         {project && (
           <Button onClick={() => setDialog({ kind: "new-task" })}>
             <Plus aria-hidden="true" />
@@ -205,11 +266,27 @@ export function App() {
         )}
         <Popover>
           <PopoverTrigger asChild>
-            <Button variant="outline" size="icon" aria-label="More: new project, project settings">
+            <Button
+              variant="outline"
+              size="icon"
+              className="relative"
+              aria-label={
+                usageAlert
+                  ? `More: projects, settings, Claude limits, ${Math.round(usageAlert.percent)}% used`
+                  : "More: projects, settings, Claude limits"
+              }
+            >
               <Ellipsis aria-hidden="true" />
+              {usageAlert && (
+                <span
+                  aria-hidden="true"
+                  className={`absolute -top-1 -right-1 size-2.5 rounded-full border-2 border-background ${usageAlert.severity === "critical" ? "bg-destructive" : "bg-amber-500"}`}
+                />
+              )}
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="grid w-56 gap-0.5 p-1">
+          <PopoverContent className="w-72 p-0" align="end">
+            <div className="grid gap-0.5 p-1">
             <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
               <FolderPlus aria-hidden="true" />
               New project
@@ -220,6 +297,8 @@ export function App() {
                 Settings
               </Button>
             )}
+            </div>
+            <UsageSection state={usageState} />
           </PopoverContent>
         </Popover>
       </header>
@@ -240,6 +319,9 @@ export function App() {
           tasks={tasks}
           onOpenTask={(task) => setDialog({ kind: "task", taskId: task.id })}
           onMove={moveTask}
+          onStart={startTask}
+          onStop={stopTask}
+          onDelete={setDeleting}
           announce={announce}
         />
       ) : (
@@ -262,6 +344,43 @@ export function App() {
       {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} onClose={closeDialog} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
+      {dialog?.kind === "command" && (
+        <CommandMenu
+          onClose={closeDialog}
+          items={buildCommands({
+            tasks,
+            projects: projects ?? [],
+            projectId,
+            newTask: project ? openNewTask : null,
+            shortcuts: openShortcuts,
+            openTask: (task) => setDialog({ kind: "task", taskId: task.id }),
+            selectProject,
+          })}
+        />
+      )}
+      <AlertDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting ? `#${deleting.number} ${deleting.title}` : ""} will be removed, with its chat, plan and worktree.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const task = deleting;
+                if (task) void act(() => api.deleteTask(task.id));
+              }}
+            >
+              Delete task
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {(dialog?.kind === "new-project" || dialog?.kind === "project") && (
         <ProjectDialog
           project={dialog.kind === "project" ? dialog.project : null}
