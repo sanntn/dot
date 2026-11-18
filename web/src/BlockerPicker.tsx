@@ -5,6 +5,8 @@ export function BlockerPicker(props: {
   candidates: Task[];
   value: number[];
   onChange: (ids: number[]) => void;
+  autoStart?: boolean;
+  onAutoStart?: (on: boolean) => void;
 }) {
   if (props.candidates.length === 0) return null;
   return (
@@ -29,6 +31,17 @@ export function BlockerPicker(props: {
           </li>
         ))}
       </ul>
+      {props.onAutoStart && props.value.length > 0 && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={props.autoStart ?? false}
+            onChange={(e) => props.onAutoStart?.(e.target.checked)}
+          />
+          Start the research by itself when these are done
+        </label>
+      )}
     </fieldset>
   );
 }

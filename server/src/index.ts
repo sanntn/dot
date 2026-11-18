@@ -68,6 +68,7 @@ const orchestrator = new Orchestrator(store, bus, {
   guardRules: guardRules({ port, root, dataDir, dbFile }),
 });
 orchestrator.recover();
+orchestrator.startUnblocked();
 
 // Don't leave claude processes running when Dot stops or restarts.
 process.on("exit", () => orchestrator.shutdown());

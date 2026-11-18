@@ -386,9 +386,29 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   );
 }
 
+function DependencyList({ title, tasks }: { title: string; tasks: { id: number; number: number; title: string; column: Column | null }[] }) {
+  return (
+    <div className="grid gap-1.5">
+      <h4 className="text-xs font-medium text-muted-foreground">{title}</h4>
+      <ul className="grid gap-1">
+        {tasks.map((t) => (
+          <li key={t.id} className="flex items-center gap-2">
+            <span className="tabular-nums text-muted-foreground">#{t.number}</span>
+            <span className="min-w-0 flex-1 truncate">{t.title}</span>
+            {t.column && <Badge variant="outline">{COLUMN_LABELS[t.column]}</Badge>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; onDeleted: () => void }) {
   const id = useId();
   const [blockers, setBlockers] = useState<number[]>(() => task.blockedBy.map((b) => b.id));
+  const [autoStart, setAutoStart] = useState(task.autoStart);
+  // Tasks still waiting on this one.
+  const blocking = tasks.filter((t) => t.blockedBy.some((b) => b.id === task.id));
   const candidates = tasks.filter((t) => t.id !== task.id && (t.column !== "done" || blockers.includes(t.id)));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -418,6 +438,7 @@ function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; on
         title: String(form.get("title") ?? ""),
         description: String(form.get("description") ?? ""),
         blockedBy: blockers,
+        autoStart: autoStart && blockers.length > 0,
       });
       if (column && column !== task.column) await api.moveTask(task.id, { column, beforeTaskId: null });
     }).then((ok) => setSaved(ok));
@@ -426,7 +447,18 @@ function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; on
   return (
     <form className="grid gap-5 p-4" onSubmit={onSubmit}>
       <TaskFields id={id} title={task.title} description={task.description} />
-      <BlockerPicker candidates={candidates} value={blockers} onChange={setBlockers} />
+      <BlockerPicker candidates={candidates} value={blockers} onChange={setBlockers} autoStart={autoStart} onAutoStart={setAutoStart} />
+      {(task.blockedBy.length > 0 || blocking.length > 0) && (
+        <div className="grid gap-3 rounded-md border p-3 text-sm">
+          {task.blockedBy.length > 0 && (
+            <DependencyList
+              title="Waiting on"
+              tasks={task.blockedBy.map((b) => tasks.find((t) => t.id === b.id) ?? { id: b.id, number: b.number, title: "", column: null })}
+            />
+          )}
+          {blocking.length > 0 && <DependencyList title="Blocking" tasks={blocking} />}
+        </div>
+      )}
       <TaskImages taskId={task.id} locked={busy} />
       <div className="grid gap-2">
         <Label htmlFor={`${id}-column`}>Column</Label>

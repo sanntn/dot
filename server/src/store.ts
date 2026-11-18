@@ -135,6 +135,7 @@ function toTask(row: Row): Task {
     reviewRound: row.review_round as number,
     costUsd: (row.cost_usd as number | undefined) ?? 0,
     blockedBy: parseBlockers(row.blocked_by),
+    autoStart: row.auto_start === 1,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -235,6 +236,18 @@ export class Store {
     return rows.map(toTask);
   }
 
+  // Inbox tasks that asked to start by themselves and have no open blocker left.
+  listReadyToAutoStart(): Task[] {
+    const rows = this.db
+      .prepare(`${TASK_SELECT} WHERE column_key = 'inbox' AND auto_start = 1 AND agent_state = 'idle'`)
+      .all() as Row[];
+    return rows.map(toTask).filter((t) => t.blockedBy.length === 0);
+  }
+
+  setAutoStart(id: number, on: boolean): void {
+    this.db.prepare("UPDATE tasks SET auto_start = ? WHERE id = ?").run(on ? 1 : 0, id);
+  }
+
   getTask(id: number): Task {
     const row = this.db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as Row | undefined;
     if (!row) throw notFound("Task");
@@ -254,10 +267,10 @@ export class Store {
       this.db.prepare("UPDATE projects SET next_task_number = ? WHERE id = ?").run(counter.n + 1, data.projectId);
       const result = this.db
         .prepare(
-          `INSERT INTO tasks (project_id, number, title, description, column_key, position, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?)`,
+          `INSERT INTO tasks (project_id, number, title, description, column_key, position, auto_start, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?, ?)`,
         )
-        .run(data.projectId, counter.n, data.title, data.description, (last.max ?? 0) + POSITION_STEP, stamp, stamp);
+        .run(data.projectId, counter.n, data.title, data.description, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
       const newId = Number(result.lastInsertRowid);
       this.setBlockers(newId, data.projectId, data.blockedBy);
       return newId;
@@ -296,8 +309,8 @@ export class Store {
     const task = this.getTask(id);
     transaction(this.db, () => {
       this.db
-        .prepare("UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?")
-        .run(patch.title ?? task.title, patch.description ?? task.description, now(), id);
+        .prepare("UPDATE tasks SET title = ?, description = ?, auto_start = ?, updated_at = ? WHERE id = ?")
+        .run(patch.title ?? task.title, patch.description ?? task.description, (patch.autoStart ?? task.autoStart) ? 1 : 0, now(), id);
       if (patch.blockedBy) this.setBlockers(id, task.projectId, patch.blockedBy);
     });
     return this.getTask(id);

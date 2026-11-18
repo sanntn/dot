@@ -40,6 +40,7 @@ export function TaskDialog(props: {
   const [templateId, setTemplateId] = useState<string>("");
   const [fill, setFill] = useState({ n: 0, title: "", description: "" });
   const [blockers, setBlockers] = useState<number[]>([]);
+  const [autoStart, setAutoStart] = useState(false);
   const [images, setImages] = useState<File[]>([]);
   const [list, setList] = useState("");
   const [templateName, setTemplateName] = useState("");
@@ -119,6 +120,7 @@ export function TaskDialog(props: {
           title: String(form.get("title") ?? ""),
           description: String(form.get("description") ?? ""),
           blockedBy: blockers,
+          autoStart: autoStart && blockers.length > 0,
         });
         const failed: string[] = [];
         for (const file of images) {
@@ -183,7 +185,7 @@ export function TaskDialog(props: {
 
               <TaskFields key={fill.n} id={id} title={fill.title} description={fill.description} />
 
-              <BlockerPicker candidates={openTasks} value={blockers} onChange={setBlockers} />
+              <BlockerPicker candidates={openTasks} value={blockers} onChange={setBlockers} autoStart={autoStart} onAutoStart={setAutoStart} />
 
               <div className="grid gap-2">
                 <Label htmlFor={`${id}-images`}>Images</Label>

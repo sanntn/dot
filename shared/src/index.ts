@@ -201,6 +201,8 @@ export const TaskSchema = z.object({
   costUsd: z.number(),
   // Tasks that must be done before this one can start. Finished blockers drop off the list.
   blockedBy: z.array(z.object({ id: z.number().int(), number: z.number().int() })),
+  // Start the research by itself once every blocker is done.
+  autoStart: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -232,6 +234,7 @@ export const TaskInputSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200),
   description: z.string().max(20000).default(""),
   blockedBy: z.array(z.number().int().positive()).max(20).default([]),
+  autoStart: z.boolean().optional(),
 });
 export type TaskInput = z.input<typeof TaskInputSchema>;
 
@@ -239,6 +242,7 @@ export const TaskPatchSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200).optional(),
   description: z.string().max(20000).optional(),
   blockedBy: z.array(z.number().int().positive()).max(20).optional(),
+  autoStart: z.boolean().optional(),
 });
 export type TaskPatch = z.input<typeof TaskPatchSchema>;
 

@@ -175,6 +175,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE projects ADD COLUMN execute_model TEXT;
   ALTER TABLE projects ADD COLUMN review_model TEXT;
   `,
+  `
+  -- A blocked task with auto_start set starts its research by itself once its blockers are done.
+  ALTER TABLE tasks ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export type Db = DatabaseSync;

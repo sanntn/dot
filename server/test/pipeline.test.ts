@@ -130,7 +130,7 @@ async function harness(launches: Launch[], extra: Partial<ConstructorParameters<
   }
   const inColumn = (column: Column) => (t: Task) => t.column === column && t.agentState !== "running" && t.agentState !== "queued";
 
-  return { store, orchestrator, task, repo, calls, until, inColumn };
+  return { store, bus, orchestrator, task, repo, calls, until, inColumn };
 }
 
 test("a task goes from the inbox to merge approval through three agents", async () => {
@@ -199,6 +199,38 @@ test("retrying the executor starts a new session on the same branch, and the rev
   assert.equal(h.store.getTask(h.task.id).branch, branch);
   assert.equal(h.orchestrator.runsFor(h.task.id).filter((r) => r.stage === "execute").length, 2);
   assert.equal(h.store.latestReview(h.task.id)?.version, 2);
+});
+
+test("a blocked task that asked to start by itself starts research once its blocker is done", async () => {
+  const h = await harness([{ turns: [[{ tool: "submit_plan", args: plan }]] }]);
+  const waiting = h.store.createTask({
+    projectId: h.task.projectId,
+    title: "Follow-up",
+    description: "",
+    blockedBy: [h.task.id],
+    autoStart: true,
+  });
+  const manual = h.store.createTask({ projectId: h.task.projectId, title: "Manual", description: "", blockedBy: [h.task.id] });
+
+  h.orchestrator.startUnblocked();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(h.store.getTask(waiting.id).column, "inbox", "still blocked");
+
+  h.store.moveTask(h.task.id, { column: "done", beforeTaskId: null });
+  h.bus.publish({ type: "tasks.changed", projectId: h.task.projectId, taskId: h.task.id });
+
+  const deadline = Date.now() + 10_000;
+  while (h.store.getTask(waiting.id).column === "inbox") {
+    assert.ok(Date.now() < deadline, "the follow-up never started");
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const started = h.store.getTask(waiting.id);
+  assert.equal(started.column === "research" || started.column === "plan_review", true);
+  assert.equal(started.autoStart, false);
+  assert.equal(h.store.getTask(manual.id).column, "inbox", "a task without the flag waits for you");
+  while (h.store.getTask(waiting.id).agentState === "running" || h.store.getTask(waiting.id).agentState === "queued") {
+    await new Promise((r) => setTimeout(r, 50));
+  }
 });
 
 test("ask_human flags the task, and the answer resumes the session", async () => {

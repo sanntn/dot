@@ -167,7 +167,11 @@ export class Orchestrator {
     private readonly config: OrchestratorConfig,
   ) {
     this.startStuckWatch();
-    this.mergeStep = new MergeStep(store, {
+    // Any board change may have finished a blocker, so look for tasks that can start.
+    this.unsubscribeBus = bus.subscribe((event) => {
+      if (event.type === "tasks.changed") setImmediate(() => this.startUnblocked());
+    });
+    this.mergeStep =new MergeStep(store, {
       publish: (taskId) => this.publish(taskId),
       stop: (taskId) => this.stop(taskId),
       resumeExecutor: (runId, prompt) => this.dispatch(runId, [{ type: "text", text: prompt }], true),
@@ -600,6 +604,19 @@ ${checksSummary(results)}` });
     await Promise.race([Promise.all(exits), new Promise((r) => setTimeout(r, 5000))]);
   }
 
+  private unsubscribeBus: (() => void) | null = null;
+
+  // Starts the research of every task that asked to start by itself and whose blockers are all done.
+  startUnblocked(): void {
+    for (const task of this.store.listReadyToAutoStart()) {
+      this.safely(task.id, () => {
+        this.store.setAutoStart(task.id, false);
+        this.store.addMessage({ taskId: task.id, runId: null, role: "system", kind: "status", text: "Its blockers are done, so Dot starts the research." });
+        this.startResearch(task.id);
+      });
+    }
+  }
+
   private stuckTimer: NodeJS.Timeout | null = null;
 
   private startStuckWatch(): void {
@@ -635,6 +652,7 @@ ${checksSummary(results)}` });
   // Kill every agent process. Called on server shutdown so no claude process outlives Dot.
   shutdown(): void {
     if (this.stuckTimer) clearInterval(this.stuckTimer);
+    this.unsubscribeBus?.();
     for (const live of this.live.values()) {
       live.stopped = true;
       live.process?.kill();

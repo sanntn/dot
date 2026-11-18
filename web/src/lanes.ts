@@ -54,7 +54,7 @@ export function isActive(task: Task): boolean {
 // One plain sentence on what the card is waiting for, taken from fields the task already carries.
 export function statusLine(task: Task): string | null {
   if (task.blockedBy.length > 0 && task.column === "inbox") {
-    return `Blocked by ${task.blockedBy.map((b) => `#${b.number}`).join(", ")}`;
+    return `Blocked by ${task.blockedBy.map((b) => `#${b.number}`).join(", ")}${task.autoStart ? ", starts by itself" : ""}`;
   }
   if (task.agentState === "failed") return "The agent stopped with an error";
   if (task.needsInput) return "The agent asked you a question";
