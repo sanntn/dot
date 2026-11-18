@@ -377,6 +377,10 @@ export function App() {
       {dialog?.kind === "command" && (
         <CommandMenu
           onClose={closeDialog}
+          openHit={(hit) => {
+            if (hit.projectId !== projectId) selectProject(hit.projectId);
+            setDialog({ kind: "task", taskId: hit.taskId });
+          }}
           items={buildCommands({
             tasks,
             projects: projects ?? [],

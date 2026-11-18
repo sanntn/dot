@@ -1,15 +1,18 @@
-import type { Project, Task } from "@dot/shared";
-import { useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { Project, SearchHit, Task } from "@dot/shared";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { api } from "./api.ts";
 import { LANE_LABELS, laneOf } from "./lanes.ts";
 
 export type CommandItem = {
   id: string;
-  group: "Actions" | "Tasks" | "Projects";
+  group: "Actions" | "Tasks" | "Projects" | "Matches";
   label: string;
   hint?: string;
+  // Text around a match in the task, with  before and  after each matched word.
+  snippet?: string;
   run: () => void;
 };
 
@@ -49,16 +52,90 @@ export function buildCommands(input: {
   return items;
 }
 
-export function CommandMenu({ items, onClose }: { items: CommandItem[]; onClose: () => void }) {
+const HIT_KINDS: Record<SearchHit["kind"], string> = {
+  task: "Brief",
+  message: "Chat",
+  plan: "Plan",
+  report: "Report",
+  review: "Review",
+};
+
+// The matched words of a snippet go in <mark>. The server wraps them in two control characters.
+function Highlighted({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("").map((part, i) => {
+        const [hit, rest] = i === 0 ? [null, part] : part.split("");
+        return (
+          <Fragment key={i}>
+            {hit !== null && <mark className="rounded-sm bg-primary/20 px-0.5 text-foreground">{hit}</mark>}
+            {rest}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+// Searches the text inside tasks on the server, once the query has two characters and typing pauses.
+function useTextMatches(query: string): SearchHit[] {
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setHits([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api
+        .search(q, controller.signal)
+        .then(setHits)
+        .catch(() => {
+          // A cancelled or failed search leaves the label matches in place.
+        });
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+  return hits;
+}
+
+export function CommandMenu({
+  items,
+  onClose,
+  openHit,
+}: {
+  items: CommandItem[];
+  onClose: () => void;
+  openHit: (hit: SearchHit) => void;
+}) {
   const [query, setQuery] = useState("");
+  const textHits = useTextMatches(query);
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
   const baseId = useId();
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q === "" ? items : items.filter((i) => i.label.toLowerCase().includes(q));
-  }, [items, query]);
+    if (q === "") return items;
+    const byLabel = items.filter((i) => i.label.toLowerCase().includes(q));
+    // A task that matched by its title is already listed, so the text matches add only the others.
+    const listed = new Set(byLabel.map((i) => i.id));
+    const byText: CommandItem[] = textHits
+      .filter((hit) => !listed.has(`task-${hit.taskId}`))
+      .map((hit) => ({
+        id: `match-${hit.taskId}`,
+        group: "Matches",
+        label: `#${hit.number} ${hit.title}`,
+        hint: `${HIT_KINDS[hit.kind]}, ${hit.projectName}`,
+        snippet: hit.snippet,
+        run: () => openHit(hit),
+      }));
+    return [...byLabel, ...byText];
+  }, [items, query, textHits, openHit]);
 
   const index = Math.min(active, Math.max(shown.length - 1, 0));
 
@@ -86,7 +163,7 @@ export function CommandMenu({ items, onClose }: { items: CommandItem[]; onClose:
       <DialogContent className="top-[20%] translate-y-0 gap-3 sm:max-w-lg">
         <DialogHeader className="sr-only">
           <DialogTitle>Search and commands</DialogTitle>
-          <DialogDescription>Type to filter. Arrow keys move, Enter runs.</DialogDescription>
+          <DialogDescription>Type to filter. Arrow keys move, Enter runs. Matches inside tasks appear after a pause.</DialogDescription>
         </DialogHeader>
         <Input
           autoFocus
@@ -119,7 +196,14 @@ export function CommandMenu({ items, onClose }: { items: CommandItem[]; onClose:
               onMouseMove={() => setActive(i)}
               onClick={() => choose(item)}
             >
-              <span className="min-w-0 truncate">{item.label}</span>
+              <span className="min-w-0">
+                <span className="block truncate">{item.label}</span>
+                {item.snippet && (
+                  <span className="block truncate text-xs text-muted-foreground">
+                    <Highlighted text={item.snippet} />
+                  </span>
+                )}
+              </span>
               <span className="shrink-0 text-xs text-muted-foreground">{item.hint ?? item.group}</span>
             </li>
           ))}

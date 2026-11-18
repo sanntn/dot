@@ -236,6 +236,19 @@ export type StorageReport = {
   other: { label: string; bytes: number }[];
 };
 
+// One task that matches a search. `snippet` holds the matching text, with \u0001 before and \u0002 after each matched word.
+export type SearchHit = {
+  taskId: number;
+  projectId: number;
+  projectName: string;
+  number: number;
+  title: string;
+  column: Column;
+  // Where the match was found.
+  kind: "task" | "message" | "plan" | "report" | "review";
+  snippet: string;
+};
+
 // One row of the All projects view. `waiting` lists the first few tasks that need you.
 export type ProjectOverview = {
   projectId: number;

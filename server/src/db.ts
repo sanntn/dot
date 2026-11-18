@@ -179,6 +179,59 @@ const MIGRATIONS: string[] = [
   -- A blocked task with auto_start set starts its research by itself once its blockers are done.
   ALTER TABLE tasks ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0;
   `,
+  `
+  -- Full text search over what people write about a task: its brief, the chat, and the plans, reports and
+  -- reviews. Triggers keep it current. Artifacts index their text values only, so JSON keys never match.
+  CREATE VIRTUAL TABLE search USING fts5(
+    kind UNINDEXED,
+    task_id UNINDEXED,
+    ref UNINDEXED,
+    body,
+    tokenize = 'unicode61 remove_diacritics 2',
+    prefix = '2 3'
+  );
+
+  INSERT INTO search (kind, task_id, ref, body)
+    SELECT 'task', id, id, title || char(10) || description FROM tasks;
+  INSERT INTO search (kind, task_id, ref, body)
+    SELECT 'message', task_id, id, text FROM messages WHERE kind IN ('text', 'question', 'error') AND text <> '';
+  INSERT INTO search (kind, task_id, ref, body)
+    SELECT 'plan', task_id, id, (SELECT group_concat(value, char(10)) FROM json_tree(payload) WHERE type = 'text')
+    FROM artifacts WHERE type = 'plan';
+  INSERT INTO search (kind, task_id, ref, body)
+    SELECT 'report', task_id, id, (SELECT group_concat(value, char(10)) FROM json_tree(payload) WHERE type = 'text')
+    FROM artifacts WHERE type = 'execution_report';
+  INSERT INTO search (kind, task_id, ref, body)
+    SELECT 'review', task_id, id, (SELECT group_concat(value, char(10)) FROM json_tree(payload) WHERE type = 'text')
+    FROM artifacts WHERE type = 'review';
+
+  CREATE TRIGGER search_task_insert AFTER INSERT ON tasks BEGIN
+    INSERT INTO search (kind, task_id, ref, body) VALUES ('task', new.id, new.id, new.title || char(10) || new.description);
+  END;
+  CREATE TRIGGER search_task_update AFTER UPDATE OF title, description ON tasks BEGIN
+    DELETE FROM search WHERE kind = 'task' AND ref = old.id;
+    INSERT INTO search (kind, task_id, ref, body) VALUES ('task', new.id, new.id, new.title || char(10) || new.description);
+  END;
+  CREATE TRIGGER search_task_delete AFTER DELETE ON tasks BEGIN
+    DELETE FROM search WHERE task_id = old.id;
+  END;
+  CREATE TRIGGER search_message_insert AFTER INSERT ON messages
+    WHEN new.kind IN ('text', 'question', 'error') AND new.text <> ''
+  BEGIN
+    INSERT INTO search (kind, task_id, ref, body) VALUES ('message', new.task_id, new.id, new.text);
+  END;
+  CREATE TRIGGER search_artifact_insert AFTER INSERT ON artifacts
+    WHEN new.type IN ('plan', 'execution_report', 'review')
+  BEGIN
+    INSERT INTO search (kind, task_id, ref, body)
+    VALUES (
+      CASE new.type WHEN 'execution_report' THEN 'report' ELSE new.type END,
+      new.task_id,
+      new.id,
+      (SELECT group_concat(value, char(10)) FROM json_tree(new.payload) WHERE type = 'text')
+    );
+  END;
+  `,
 ];
 
 export type Db = DatabaseSync;

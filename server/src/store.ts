@@ -31,6 +31,7 @@ import type {
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
+import { searchTasks } from "./search.ts";
 
 type ProjectData = z.output<typeof ProjectInputSchema>;
 type ProjectPatchData = z.output<typeof ProjectPatchSchema>;
@@ -186,6 +187,10 @@ export type Attachment = AttachmentRef & { taskId: number; size: number; path: s
 
 export class Store {
   constructor(private readonly db: Db) {}
+
+  search(query: string, options: { projectId?: number; limit?: number } = {}) {
+    return searchTasks(this.db, query, options);
+  }
 
   listProjects(): Project[] {
     const rows = this.db.prepare("SELECT * FROM projects ORDER BY name COLLATE NOCASE").all() as Row[];

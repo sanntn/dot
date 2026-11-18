@@ -12,6 +12,7 @@ import type {
   Project,
   ProjectInput,
   ProjectOverview,
+  SearchHit,
   ProjectPatch,
   RemoteInfo,
   ReviewArtifact,
@@ -75,6 +76,8 @@ export const api = {
     request<{ running: boolean; error: string | null }>("/claude-login-status", "POST", { configDir }),
   repoRemote: (repoPath: string) => request<RemoteInfo>("/repo-remote", "POST", { repoPath }),
 
+  search: (query: string, signal?: AbortSignal) =>
+    send<SearchHit[]>(`/search?q=${encodeURIComponent(query)}`, { signal }),
   overview: () => request<ProjectOverview[]>("/overview"),
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),
   createTask: (input: TaskInput) => request<Task>("/tasks", "POST", input),

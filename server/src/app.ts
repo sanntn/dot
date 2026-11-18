@@ -374,6 +374,12 @@ export function createApp(
     return c.json(overview);
   });
 
+  // Full text search over briefs, chat, plans, reports and reviews. projectId narrows it to one project.
+  app.get("/search", (c) => {
+    const projectId = Number(c.req.query("projectId"));
+    return c.json(store.search(c.req.query("q") ?? "", Number.isInteger(projectId) && projectId > 0 ? { projectId } : {}));
+  });
+
   // Disk usage, and cleanup of finished tasks' worktrees and orphan folders.
   app.get("/storage", async (c) => {
     if (!options.storage) throw new HttpError(404, "Storage is not set up");
