@@ -88,6 +88,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 const api = createApp(store, bus, orchestrator, {
   attachmentsDir: resolve(dataDir, "attachments"),
   reposDir,
+  storage: { worktreesDir, dbFile, backupsDir, attachmentsDir: resolve(dataDir, "attachments") },
   auth,
   allowedHosts: (process.env.DOT_ALLOWED_HOSTS ?? "")
     .split(",")

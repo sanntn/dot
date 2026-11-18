@@ -221,6 +221,21 @@ export function laneOf(task: Pick<Task, "column" | "needsInput" | "agentState">)
   return "working";
 }
 
+// What Dot keeps on disk. A worktree is removable once its task is done. Orphans are folders no task owns.
+export type StorageReport = {
+  worktrees: {
+    taskId: number;
+    number: number;
+    title: string;
+    projectName: string;
+    column: Column;
+    bytes: number;
+    removable: boolean;
+  }[];
+  orphans: { name: string; bytes: number }[];
+  other: { label: string; bytes: number }[];
+};
+
 // One row of the All projects view. `waiting` lists the first few tasks that need you.
 export type ProjectOverview = {
   projectId: number;

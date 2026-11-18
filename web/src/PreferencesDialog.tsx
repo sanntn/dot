@@ -1,10 +1,113 @@
-import type { TaskTemplate } from "@dot/shared";
+import type { StorageReport, TaskTemplate } from "@dot/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, errorMessage } from "./api.ts";
 import { setFullDetail, useFullDetail } from "./detail.tsx";
 import { notificationsEnabled, notificationsSupported, setNotifications } from "./notifications.ts";
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+// What Dot keeps on the server's disk. This is not a per-browser setting, unlike the rest of this dialog.
+function StorageSection() {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [freed, setFreed] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.getStorage().then(
+      (found) => alive && setReport(found),
+      (err) => alive && setError(errorMessage(err)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function clean() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.cleanStorage();
+      setFreed(`Removed ${result.removed} ${result.removed === 1 ? "folder" : "folders"}, freed ${formatBytes(result.freedBytes)}.`);
+      setReport(await api.getStorage());
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const worktreeBytes = report?.worktrees.reduce((sum, w) => sum + w.bytes, 0) ?? 0;
+  const removable = report ? report.worktrees.filter((w) => w.removable).length + report.orphans.length : 0;
+  const biggest = report ? [...report.worktrees].sort((a, b) => b.bytes - a.bytes).slice(0, 5) : [];
+
+  return (
+    <section className="grid gap-2" aria-labelledby="storage-heading">
+      <h3 id="storage-heading" className="text-sm font-semibold">
+        Disk space
+      </h3>
+      <p className="text-sm text-muted-foreground">
+        What Dot keeps on the server. Cleaning removes the worktrees of finished tasks and folders no task owns. Branches stay in your repository.
+      </p>
+      {!report && !error && <p className="text-sm text-muted-foreground">Measuring...</p>}
+      {report && (
+        <>
+          <ul className="grid gap-1 text-sm">
+            <li className="flex justify-between gap-2">
+              <span>Worktrees ({report.worktrees.length})</span>
+              <span className="tabular-nums">{formatBytes(worktreeBytes)}</span>
+            </li>
+            {report.orphans.length > 0 && (
+              <li className="flex justify-between gap-2">
+                <span>Folders no task owns ({report.orphans.length})</span>
+                <span className="tabular-nums">{formatBytes(report.orphans.reduce((s, o) => s + o.bytes, 0))}</span>
+              </li>
+            )}
+            {report.other.map((o) => (
+              <li key={o.label} className="flex justify-between gap-2">
+                <span>{o.label}</span>
+                <span className="tabular-nums">{formatBytes(o.bytes)}</span>
+              </li>
+            ))}
+          </ul>
+          {biggest.length > 0 && (
+            <ul className="grid gap-1 text-xs text-muted-foreground">
+              {biggest.map((w) => (
+                <li key={w.taskId} className="flex justify-between gap-2">
+                  <span className="truncate">
+                    #{w.number} {w.title}
+                    {w.removable ? ", done" : ""}
+                  </span>
+                  <span className="tabular-nums">{formatBytes(w.bytes)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-center gap-3">
+            <Button variant="outline" disabled={busy || removable === 0} onClick={() => void clean()}>
+              Remove finished worktrees
+            </Button>
+            {freed && <span className="text-sm text-muted-foreground" role="status">{freed}</span>}
+          </div>
+        </>
+      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </section>
+  );
+}
 
 export function PreferencesDialog({ projectId, onClose }: { projectId: number | null; onClose: () => void }) {
   const [on, setOn] = useState(notificationsEnabled);
@@ -79,6 +182,8 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
             </Button>
           </div>
         </section>
+
+        <StorageSection />
 
         <section className="grid gap-2" aria-labelledby="templates-heading">
           <h3 id="templates-heading" className="text-sm font-semibold">

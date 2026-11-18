@@ -83,7 +83,7 @@ export async function git(
   return stdout;
 }
 
-async function gitOk(cwd: string, args: string[]): Promise<boolean> {
+export async function gitOk(cwd: string, args: string[]): Promise<boolean> {
   try {
     await git(cwd, args);
     return true;

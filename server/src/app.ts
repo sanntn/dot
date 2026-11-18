@@ -38,6 +38,7 @@ import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } 
 import { GitHub } from "./github.ts";
 import { detectRemote, parseRemoteUrl } from "./githost.ts";
 import type { Orchestrator } from "./orchestrator.ts";
+import { cleanStorage, storageReport, type StoragePaths } from "./storage.ts";
 import type { Store } from "./store.ts";
 import { claudeUsage } from "./usage.ts";
 
@@ -136,7 +137,7 @@ export function createApp(
   store: Store,
   bus: EventBus,
   orchestrator: Orchestrator,
-  options: { attachmentsDir: string; reposDir: string; auth: Auth; allowedHosts?: string[] },
+  options: { attachmentsDir: string; reposDir: string; auth: Auth; allowedHosts?: string[]; storage?: StoragePaths },
 ) {
   const extraHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
   const app = new Hono().basePath("/api");
@@ -372,7 +373,17 @@ export function createApp(
     return c.json(overview);
   });
 
-  app.get("/projects/:id/tasks", (c) => c.json(store.listTasks(idParam(c))));
+  // Disk usage, and cleanup of finished tasks' worktrees and orphan folders.
+  app.get("/storage", async (c) => {
+    if (!options.storage) throw new HttpError(404, "Storage is not set up");
+    return c.json(await storageReport(store, options.storage));
+  });
+  app.post("/storage/clean", async (c) => {
+    if (!options.storage) throw new HttpError(404, "Storage is not set up");
+    return c.json(await cleanStorage(store, options.storage));
+  });
+
+  app.get("/projects/:id/tasks",(c) => c.json(store.listTasks(idParam(c))));
 
   app.post("/tasks", async (c) => {
     const task = store.createTask(await parseBody(c, TaskInputSchema));
