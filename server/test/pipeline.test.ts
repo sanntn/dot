@@ -1,3 +1,4 @@
+import { taskMarkdown } from "../src/export.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -163,6 +164,16 @@ test("a task goes from the inbox to merge approval through three agents", async 
   assert.equal(launches[1]!.cwd, executed.worktreePath);
   assert.notEqual(launches[0]!.cwd, executed.worktreePath);
   assert.match(String(launches[1]!.prompt), /hello\.txt/);
+
+  // The export holds the request and the latest plan, report and review.
+  const markdown = taskMarkdown(h.store, h.task.id);
+  assert.match(markdown, /^# #1 Add a greeting/);
+  assert.match(markdown, /## Request\n\nMake hello\.txt\./);
+  assert.match(markdown, /## Plan \(version 1\)/);
+  assert.match(markdown, /1\. Create hello\.txt/);
+  assert.match(markdown, /`[0-9a-f]+` Add hello\.txt/);
+  assert.match(markdown, /## Review \(round 1, approved\)/);
+  assert.match(markdown, /## History\n\n- [^\n]*moved to Research[\s\S]*moved to Merge approval/);
 
   // Cost from each run is recorded.
   const runs = h.orchestrator.runsFor(h.task.id);

@@ -11,7 +11,7 @@ import {
   type Run,
   type Task,
 } from "@dot/shared";
-import { FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
+import { Download, FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -286,6 +286,12 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                 </PopoverContent>
               </Popover>
             )}
+            <Button size="sm" variant="outline" asChild>
+              <a href={`/api/tasks/${task.id}/export`} download>
+                <Download aria-hidden="true" />
+                Export
+              </a>
+            </Button>
             {working && (
               <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.stopTask(task.id))}>
                 <Square aria-hidden="true" />

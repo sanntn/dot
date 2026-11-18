@@ -38,6 +38,7 @@ import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } 
 import { GitHub } from "./github.ts";
 import { detectRemote, parseRemoteUrl } from "./githost.ts";
 import type { Orchestrator } from "./orchestrator.ts";
+import { taskMarkdown } from "./export.ts";
 import { cleanStorage, storageReport, type StoragePaths } from "./storage.ts";
 import type { Store } from "./store.ts";
 import { claudeUsage } from "./usage.ts";
@@ -449,6 +450,16 @@ export function createApp(
   app.post("/tasks/:id/retry", async (c) => {
     const { stage } = await parseBody(c, RetrySchema);
     return c.json(await orchestrator.retryFrom(idParam(c), stage));
+  });
+
+  // The task as a Markdown file: request, latest plan, report and review, and history.
+  app.get("/tasks/:id/export", (c) => {
+    const id = idParam(c);
+    const task = store.getTask(id);
+    const slug = task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "task";
+    c.header("Content-Type", "text/markdown; charset=utf-8");
+    c.header("Content-Disposition", `attachment; filename="task-${task.number}-${slug}.md"`);
+    return c.body(taskMarkdown(store, id));
   });
 
   app.get("/tasks/:id/review", (c) => {
