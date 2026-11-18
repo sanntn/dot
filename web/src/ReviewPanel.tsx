@@ -10,6 +10,7 @@ import { api, errorMessage } from "./api.ts";
 import { CheckIcon } from "./ChangesPanel.tsx";
 import { ClampedProse, Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
+import { RuleSuggestions } from "./RulesSection.tsx";
 
 export function ReviewPanel({ task, artifact, working }: { task: Task; artifact: ReviewArtifact | null; working: boolean }) {
   const [requesting, setRequesting] = useState(false);
@@ -120,6 +121,8 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
                 )}
               </MoreDetails>
             )}
+
+            <RuleSuggestions task={task} />
           </>
         )}
       </div>

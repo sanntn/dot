@@ -297,6 +297,23 @@ export type TaskTemplate = {
   description: string;
 };
 
+// A line the project's agents are told to follow. The reviewer suggests them, and the user accepts or dismisses each.
+export const RuleInputSchema = z.object({ text: z.string().trim().min(1, "Write the rule").max(300) });
+export const RulePatchSchema = z
+  .object({ status: z.enum(["active", "dismissed"]), text: z.string().trim().min(1).max(300) })
+  .partial()
+  .refine((p) => p.status !== undefined || p.text !== undefined, { message: "Nothing to change" });
+export type RuleStatus = "suggested" | "active" | "dismissed";
+export type ProjectRule = {
+  id: number;
+  projectId: number;
+  text: string;
+  status: RuleStatus;
+  // The task whose review suggested it.
+  sourceTaskId: number | null;
+  createdAt: string;
+};
+
 // Move a task into a column, before another task in that column.
 // beforeTaskId null puts it at the end.
 export const TaskMoveSchema = z.object({
@@ -428,6 +445,13 @@ export const ReviewSchema = z
       )
       .describe("Problems found. Empty if none."),
     checks: z.array(CheckSchema).describe("Tests, lint, typecheck and other checks you ran."),
+    lessons: z
+      .array(z.string().trim().min(1).max(300))
+      .max(2)
+      .optional()
+      .describe(
+        "Rules for future tasks in this project, when an issue shows a convention the agents keep missing. One short imperative sentence each, at most two. Leave it out otherwise. The user decides which become rules.",
+      ),
   })
   .refine((r) => (r.verdict === "approve") === !r.issues.some((i) => i.severity === "blocking"), {
     message: "Use approve when there are no blocking issues, and changes_requested when there is at least one.",

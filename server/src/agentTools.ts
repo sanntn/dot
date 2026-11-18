@@ -154,6 +154,8 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
       const saved = store.addReview(run.taskId, runId, cycleRound, report.version, review);
       store.setReviewRound(run.taskId, cycleRound);
       const round = saved.version;
+      // Lessons wait as suggestions until the user accepts them. They never reach an agent before that.
+      store.suggestRules(task.projectId, task.id, review.lessons ?? []);
       const blocking = review.issues.filter((i) => i.severity === "blocking");
       live.outcome = true;
 

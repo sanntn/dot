@@ -409,3 +409,60 @@ test("a reviewer that requests changes sends the task back to the executor", asy
   const fixPrompt = h.calls().filter((c) => "prompt" in c)[3];
   assert.match(String(fixPrompt?.prompt), /Wrong text/);
 });
+
+test("accepted rules reach the agents, and a review's lessons wait as suggestions", async () => {
+  const h = await harness([
+    { name: "researcher", turns: [[{ tool: "submit_plan", args: plan }]] },
+    { name: "executor", turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    {
+      name: "reviewer",
+      turns: [
+        [
+          {
+            tool: "submit_review",
+            args: {
+              ...review("approve"),
+              lessons: ["Use the shared api client, not fetch.", "keep greetings in HELLO.txt."],
+            },
+          },
+        ],
+      ],
+    },
+  ]);
+  const projectId = h.task.projectId;
+  h.store.addRule(projectId, "Keep greetings in hello.txt.", "active");
+  h.store.addRule(projectId, "Never touch the lockfile.", "dismissed");
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("merge approval", h.inColumn("merge_approval"));
+
+  // The user's rule is in the researcher's and executor's briefs. The dismissed rule is not.
+  const prompts = h.calls().filter((c) => "prompt" in c).map((c) => String(c.prompt));
+  assert.equal(prompts.length, 3);
+  for (const prompt of prompts) {
+    assert.match(prompt, /# Project rules[\s\S]*- Keep greetings in hello\.txt\./);
+    assert.doesNotMatch(prompt, /lockfile/);
+  }
+
+  // Of two lessons, one repeats an active rule in different case, so only the other is suggested.
+  const rules = h.store.listRules(projectId);
+  assert.deepEqual(
+    rules.map((r) => [r.text, r.status]),
+    [
+      ["Keep greetings in hello.txt.", "active"],
+      ["Use the shared api client, not fetch.", "suggested"],
+    ],
+  );
+  assert.equal(rules[1]!.sourceTaskId, h.task.id);
+  // A suggestion is not an instruction until the user accepts it.
+  assert.deepEqual(h.store.activeRules(projectId), ["Keep greetings in hello.txt."]);
+
+  h.store.updateRule(rules[1]!.id, { status: "active" });
+  assert.equal(h.store.activeRules(projectId).length, 2);
+  h.store.deleteRule(rules[1]!.id);
+  assert.equal(h.store.listRules(projectId).length, 1);
+  // Removing a rule keeps it dismissed, so the reviewer can't bring it back.
+  assert.equal(h.store.addRule(projectId, "use the shared API client,  not fetch.", "suggested"), null);
+});

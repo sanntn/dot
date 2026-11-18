@@ -215,7 +215,7 @@ export class Orchestrator {
     this.store.setNeedsInput(task.id, false);
     const run = this.store.createRun(task.id, "research", randomUUID());
     this.store.addMessage({ taskId: task.id, runId: run.id, role: "system", kind: "status", text: note });
-    this.dispatch(run.id, buildContent(researcherBrief(task, project), this.store.taskAttachments(task.id)), true);
+    this.dispatch(run.id, buildContent(researcherBrief(task, project, this.store.activeRules(project.id)), this.store.taskAttachments(task.id)), true);
     this.publish(task.id);
     return this.store.getTask(task.id);
   }
@@ -262,7 +262,7 @@ export class Orchestrator {
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Researcher resumed." });
     const content: ContentBlock[] = run.sessionStarted
       ? [{ type: "text", text: "Continue the research. When you are ready, call submit_plan. If you need a decision from the user, call ask_human." }]
-      : buildContent(researcherBrief(task, this.store.getProject(task.projectId)), this.store.taskAttachments(taskId));
+      : buildContent(researcherBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
     this.dispatch(run.id, content, true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -374,7 +374,7 @@ export class Orchestrator {
       text: existing ? `Executor resumed on ${branch}.` : `Execution started on ${branch}.`,
     });
 
-    const brief = executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch);
+    const brief = executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch, this.store.activeRules(project.id));
     const prompt = run.sessionStarted
       ? "Continue implementing the approved plan. When the work is committed, call submit_execution_report."
       : latest && options.fresh
@@ -440,7 +440,7 @@ export class Orchestrator {
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `Review round ${round} started.` });
     const prompt = run.sessionStarted
       ? reviewerFollowUp(report, round, baseRef, checks)
-      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef, checks);
+      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef, checks, this.store.activeRules(project.id));
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);

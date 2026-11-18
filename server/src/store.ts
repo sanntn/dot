@@ -13,10 +13,12 @@ import type {
   Plan,
   PlanArtifact,
   Project,
+  ProjectRule,
   Review,
   RepoHost,
   ReviewArtifact,
   Run,
+  RuleStatus,
   RunStatus,
   ProjectPatchSchema,
   ProjectInputSchema,
@@ -166,6 +168,17 @@ function toRun(row: Row): Run {
     error: row.error as string | null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+  };
+}
+
+function toRule(row: Row): ProjectRule {
+  return {
+    id: row.id as number,
+    projectId: row.project_id as number,
+    text: row.text as string,
+    status: row.status as RuleStatus,
+    sourceTaskId: (row.source_task_id as number | null) ?? null,
+    createdAt: row.created_at as string,
   };
 }
 
@@ -645,6 +658,55 @@ export class Store {
     if (row.origin !== "task") throw new HttpError(400, "Only images attached to the task can be removed");
     this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
     return attachment.path;
+  }
+
+  // Project rules
+
+  listRules(projectId: number): ProjectRule[] {
+    this.getProject(projectId);
+    const rows = this.db
+      .prepare("SELECT * FROM project_rules WHERE project_id = ? AND status <> 'dismissed' ORDER BY id")
+      .all(projectId) as Row[];
+    return rows.map(toRule);
+  }
+
+  // What the agents are told. Only rules the user accepted.
+  activeRules(projectId: number): string[] {
+    const rows = this.db
+      .prepare("SELECT text FROM project_rules WHERE project_id = ? AND status = 'active' ORDER BY id")
+      .all(projectId) as { text: string }[];
+    return rows.map((r) => r.text);
+  }
+
+  addRule(projectId: number, text: string, status: RuleStatus, sourceTaskId: number | null = null): ProjectRule | null {
+    this.getProject(projectId);
+    // The same rule, in any status, is not added twice. A dismissed one stays dismissed.
+    const key = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+    const existing = this.db.prepare("SELECT text FROM project_rules WHERE project_id = ?").all(projectId) as { text: string }[];
+    if (existing.some((r) => key(r.text) === key(text))) return null;
+    const result = this.db
+      .prepare("INSERT INTO project_rules (project_id, text, status, source_task_id, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, text, status, sourceTaskId, now());
+    return toRule(this.db.prepare("SELECT * FROM project_rules WHERE id = ?").get(Number(result.lastInsertRowid)) as Row);
+  }
+
+  suggestRules(projectId: number, taskId: number, texts: string[]): ProjectRule[] {
+    return texts.flatMap((text) => this.addRule(projectId, text, "suggested", taskId) ?? []);
+  }
+
+  updateRule(id: number, patch: { status?: RuleStatus; text?: string }): ProjectRule {
+    const row = this.db.prepare("SELECT * FROM project_rules WHERE id = ?").get(id) as Row | undefined;
+    if (!row) throw notFound("Rule");
+    this.db
+      .prepare("UPDATE project_rules SET status = ?, text = ? WHERE id = ?")
+      .run(patch.status ?? (row.status as string), patch.text ?? (row.text as string), id);
+    return toRule(this.db.prepare("SELECT * FROM project_rules WHERE id = ?").get(id) as Row);
+  }
+
+  deleteRule(id: number): void {
+    // Dismissed, not deleted, so the reviewer's next suggestion of the same rule stays hidden.
+    const result = this.db.prepare("UPDATE project_rules SET status = 'dismissed' WHERE id = ?").run(id);
+    if (result.changes === 0) throw notFound("Rule");
   }
 
   // Templates

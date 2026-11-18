@@ -232,6 +232,19 @@ const MIGRATIONS: string[] = [
     );
   END;
   `,
+  `
+  -- What the project's agents are told to follow. The reviewer suggests rules after a review. A suggestion
+  -- becomes active when the user accepts it, and dismissed ones stay so they are not suggested again.
+  CREATE TABLE project_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX project_rules_project ON project_rules(project_id, status);
+  `,
 ];
 
 export type Db = DatabaseSync;

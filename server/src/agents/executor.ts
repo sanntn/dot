@@ -1,4 +1,5 @@
 import type { Plan, Project, Task } from "@dot/shared";
+import { rulesNote } from "./rules.ts";
 
 export const EXECUTOR_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
 
@@ -86,7 +87,7 @@ export function planMarkdown(plan: Plan): string {
   ].join("\n\n");
 }
 
-export function executorBrief(task: Task, project: Project, plan: Plan, planVersion: number, branch: string): string {
+export function executorBrief(task: Task, project: Project, plan: Plan, planVersion: number, branch: string, rules: string[] = []): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
     project.lintCommand && `lint: ${project.lintCommand}`,
@@ -102,6 +103,7 @@ export function executorBrief(task: Task, project: Project, plan: Plan, planVers
     `You are on branch ${branch}, created from ${project.baseBranch}.`,
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
+    rulesNote(rules),
     `# Approved plan (version ${planVersion})`,
     "",
     planMarkdown(plan),

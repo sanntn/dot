@@ -1,4 +1,5 @@
 import type { Project, Task } from "@dot/shared";
+import { rulesNote } from "./rules.ts";
 
 // Built-in tools the researcher has at all. Write, Edit and the rest are not even loaded.
 export const RESEARCHER_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
@@ -55,7 +56,7 @@ The user may chat with you later, including after the plan is approved. Answer t
 If they ask for changes while the plan is still under review, submit a revised plan with submit_plan.
 `.trim();
 
-export function researcherBrief(task: Task, project: Project): string {
+export function researcherBrief(task: Task, project: Project, rules: string[] = []): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
     project.lintCommand && `lint: ${project.lintCommand}`,
@@ -71,6 +72,7 @@ export function researcherBrief(task: Task, project: Project): string {
     `Repository: ${project.repoPath} (base branch ${project.baseBranch})`,
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
+    rulesNote(rules),
     "Research this task and submit a plan with submit_plan. Use ask_human if something is unclear.",
   ].join("\n");
 }

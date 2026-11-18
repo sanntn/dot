@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, errorMessage } from "./api.ts";
 import { setFullDetail, useFullDetail } from "./detail.tsx";
+import { RulesSection } from "./RulesSection.tsx";
 import { notificationsEnabled, notificationsSupported, setNotifications } from "./notifications.ts";
 
 export function formatBytes(bytes: number): string {
@@ -144,10 +145,10 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Preferences</DialogTitle>
-          <DialogDescription>These apply to this browser.</DialogDescription>
+          <DialogDescription>Notifications and detail apply to this browser. Rules and templates belong to the project.</DialogDescription>
         </DialogHeader>
 
         <section className="grid gap-2" aria-labelledby="notify-heading">
@@ -182,6 +183,8 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
             </Button>
           </div>
         </section>
+
+        {projectId !== null && <RulesSection projectId={projectId} />}
 
         <StorageSection />
 

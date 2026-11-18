@@ -23,6 +23,8 @@ import {
   SendMessageSchema,
   TaskBatchSchema,
   TaskInputSchema,
+  RuleInputSchema,
+  RulePatchSchema,
   TemplateInputSchema,
   TaskMoveSchema,
   TaskPatchSchema,
@@ -404,6 +406,20 @@ export function createApp(
     const tasks = titles.map((title) => store.createTask({ projectId, title, description: "", blockedBy: [] }));
     bus.publish({ type: "tasks.changed", projectId });
     return c.json(tasks, 201);
+  });
+
+  // Rules the project's agents follow. Suggestions from reviews sit here until you accept or dismiss them.
+  app.get("/projects/:id/rules", (c) => c.json(store.listRules(idParam(c))));
+  app.post("/projects/:id/rules", async (c) => {
+    const { text } = await parseBody(c, RuleInputSchema);
+    const rule = store.addRule(idParam(c), text, "active");
+    if (!rule) throw new HttpError(409, "The project already has this rule, or you dismissed it before.");
+    return c.json(rule, 201);
+  });
+  app.patch("/rules/:id", async (c) => c.json(store.updateRule(idParam(c), await parseBody(c, RulePatchSchema))));
+  app.delete("/rules/:id", (c) => {
+    store.deleteRule(idParam(c));
+    return c.body(null, 204);
   });
 
   app.get("/projects/:id/templates", (c) => c.json(store.listTemplates(idParam(c))));

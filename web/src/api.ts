@@ -12,6 +12,8 @@ import type {
   Project,
   ProjectInput,
   ProjectOverview,
+  ProjectRule,
+  RuleStatus,
   SearchHit,
   ProjectPatch,
   RemoteInfo,
@@ -82,6 +84,11 @@ export const api = {
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),
   createTask: (input: TaskInput) => request<Task>("/tasks", "POST", input),
   createTasks: (projectId: number, titles: string[]) => request<Task[]>("/tasks/batch", "POST", { projectId, titles }),
+  listRules: (projectId: number) => request<ProjectRule[]>(`/projects/${projectId}/rules`),
+  addRule: (projectId: number, text: string) => request<ProjectRule>(`/projects/${projectId}/rules`, "POST", { text }),
+  updateRule: (id: number, patch: { status?: Exclude<RuleStatus, "suggested">; text?: string }) =>
+    request<ProjectRule>(`/rules/${id}`, "PATCH", patch),
+  deleteRule: (id: number) => request<void>(`/rules/${id}`, "DELETE"),
   listTemplates: (projectId: number) => request<TaskTemplate[]>(`/projects/${projectId}/templates`),
   addTemplate: (projectId: number, input: TemplateInput) =>
     request<TaskTemplate>(`/projects/${projectId}/templates`, "POST", input),

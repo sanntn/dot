@@ -1,4 +1,5 @@
 import type { ExecutionArtifact, Plan, Project, ReviewIssue, Task } from "@dot/shared";
+import { rulesNote } from "./rules.ts";
 import { checksSummary, type CheckResult } from "../checks.ts";
 import { planMarkdown } from "./executor.ts";
 import { RESEARCHER_ALLOWED_TOOLS, RESEARCHER_DENIED_TOOLS } from "./researcher.ts";
@@ -41,6 +42,10 @@ How to work:
 - Call submit_review. The verdict is approve when there are no blocking issues, and changes_requested when there
   is at least one. Blocking issues go back to the executor, which fixes them in another round.
   Give the review a headline: one plain sentence with the verdict and the reason. The board shows it first.
+- When an issue shows a habit that would hurt future tasks in this project too, not only this change, add it to
+  lessons as one short imperative rule, for example "Use the shared api client instead of calling fetch directly."
+  Add at most two, and only when you are sure. Leave lessons out otherwise. The user decides which become rules.
+  Rules the user already set are in the brief under Project rules. A change that breaks one is a blocking issue.
 - After submit_review succeeds, end your turn with a short summary.
 - Use ask_human only when the plan itself is ambiguous in a way you can't judge.
 
@@ -71,6 +76,7 @@ export function reviewerBrief(
   round: number,
   baseRef: string,
   checks?: CheckResult[],
+  rules: string[] = [],
 ): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
@@ -89,6 +95,7 @@ export function reviewerBrief(
       (baseRef === project.baseBranch ? "" : ` (${baseRef} is Dot's fetched copy of origin's ${project.baseBranch})`),
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
+    rulesNote(rules),
     `# Approved plan (version ${planVersion})`,
     "",
     planMarkdown(plan),
