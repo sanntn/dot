@@ -34,6 +34,8 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 | `DOT_CLAUDE_BIN` | `claude` | Path to the CLI, if it isn't on `PATH` |
 | `DOT_PORT` | `4317` | API port |
 | `DOT_DB` | `data/dot.db` | Database file |
+| `DOT_<NAME>_FILE` | none | Reads a secret from a file instead of `.env`. Works for `DOT_PASSWORD`, `DOT_SESSION_SECRET`, `DOT_BITBUCKET_TOKEN`, `DOT_GITHUB_TOKEN`, `DOT_CLAUDE_TOKEN` and `DOT_CLAUDE_TOKEN_<NAME>`. For example `DOT_GITHUB_TOKEN_FILE=/home/me/.dot/github-token`. A value set directly wins. Docker and Coolify secret mounts (`/run/secrets/...`) work the same way. |
+| `DOT_AGENT_SANDBOX` | off | Set to `on` to run every agent command inside Claude Code's own sandbox, with Dot's private files unreadable. See Agent isolation. |
 | `DOT_BACKUP_KEEP` | `7` | How many daily database backups to keep in `data/backups`. `0` turns backups off. |
 | `DOT_NOTIFY_URL` | none | A webhook that gets a message when a task starts waiting for you: a question, a failure, a plan to review or a change to merge. Works with ntfy, Slack and Discord incoming webhooks, or any endpoint that takes a JSON POST. |
 | `DOT_NOTIFY_FORMAT` | `json` | `json` sends `text`, `content` and the task's fields. Use `text` for ntfy, which takes a plain body and a title header. |
@@ -107,7 +109,12 @@ Agents run shell commands, so whatever their OS user can read, a prompt-injected
 
 **Docker image.** The server runs as root. Every agent, and every git command that reads agent-written files, runs as the `node` user with no capabilities (`setpriv`, no new privileges). The database, session secret, attachments and the server's environment belong to root. Tokens never go to a git process an agent could influence: Dot fetches from GitHub or Bitbucket into its own repository under `data/transport`, agents copy from there, and a push goes through a bundle file that Dot fetches into that repository first. Dot pushes to the address built from the project's host, owner and repo settings, never to the origin set in the repository's own config, which an agent can edit. At start-up Dot tries to read its own files as the agent user and refuses to start if it can. What is left: agents share one user, so one agent could read another's run token from `/proc/<pid>/cmdline`. `docker/smoke-test.ts` checks the clone, fetch and push path inside a running container (the file's header says how to run it).
 
-**Locally.** Agents run as you. Nothing stops an agent from reading `.env` or calling Dot's API on `127.0.0.1`, so anything it is told to do by text in a repository or web page runs with your rights. Dot adds deny rules for its own API port, its private files, `/proc` environment dumps and git commands that leave the task branch. They block the direct route and a script gets past them. Use a fine-grained GitHub token, and run Dot in the Docker image or a VM if you point it at repositories you don't trust.
+**Locally.** Agents run as you, so anything an agent is told to do by text in a repository or web page runs with your rights. Dot adds deny rules for its own API port, its private files, `/proc` environment dumps and git commands that leave the task branch. For the file tools (Read, Edit, Write, Grep, Glob) the rules hold: the claude CLI enforces them, and it already refuses `.env` on its own. For shell commands they are text matches, so a script gets past them. Two things narrow the gap:
+
+- **Keep secrets out of `.env`.** Put each token in a file outside the repository and point `DOT_<NAME>_FILE` at it (see the table above). Dot guards those files like its database. When a secret is still in `.env`, Dot says so at start-up. This does not hide the file from a script that runs as you. It keeps the secret out of the repository folder and out of what the file tools can reach.
+- **Turn on the sandbox** with `DOT_AGENT_SANDBOX=on`. Claude Code then enforces the private paths (`.env`, the database, the session secret, attachments, backups and your secret files) on every command an agent runs, scripts included. The network and the rest of the disk stay open, so installs and tests still work. The sandbox exists on macOS, Linux and WSL2. On native Windows it is not available, and with this setting on, agents refuse to start instead of running without it. I checked that refusal on Windows. The sandbox itself has not been run here.
+
+Use a fine-grained GitHub token, and run Dot in the Docker image or a VM if you point it at repositories you don't trust.
 
 ## Layout
 

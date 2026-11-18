@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -8,11 +8,13 @@ import { Auth } from "./auth.ts";
 import { startBackups } from "./backup.ts";
 import { openDb } from "./db.ts";
 import { EventBus } from "./events.ts";
-import { guardRules } from "./agents/guards.ts";
+import { setSandbox } from "./agents/claude.ts";
+import { guardRules, sandboxSettings } from "./agents/guards.ts";
 import { configureTransport } from "./git.ts";
 import { agentDir, isolated, verifyIsolation } from "./isolation.ts";
 import { startNotifier } from "./notify.ts";
 import { Orchestrator } from "./orchestrator.ts";
+import { loadSecretFiles, secretsInEnvFile } from "./secrets.ts";
 import { Store } from "./store.ts";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -20,6 +22,29 @@ try {
   process.loadEnvFile(resolve(root, ".env"));
 } catch {
   // No .env file. Defaults apply.
+}
+
+// Secrets can sit in files outside the repo (DOT_GITHUB_TOKEN_FILE and the like) instead of in .env.
+let secretFiles: string[] = [];
+try {
+  secretFiles = loadSecretFiles();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+}
+if (!isolated) {
+  // Agents run as you here, so a token in .env is one file read away from a prompt-injected agent.
+  try {
+    const inEnvFile = secretsInEnvFile(readFileSync(resolve(root, ".env"), "utf8"));
+    if (inEnvFile.length > 0) {
+      console.warn(
+        `${inEnvFile.join(", ")} ${inEnvFile.length === 1 ? "is" : "are"} in .env, which agents running as you can read. ` +
+          "Move each secret to a file outside the repository and set DOT_<NAME>_FILE to its path, for example DOT_GITHUB_TOKEN_FILE.",
+      );
+    }
+  } catch {
+    // No .env file.
+  }
 }
 
 const port = Number(process.env.DOT_PORT ?? 4317);
@@ -37,6 +62,10 @@ if (!isLoopback && !auth.enabled) {
   process.exit(1);
 }
 const dbFile = process.env.DOT_DB ?? resolve(dataDir, "dot.db");
+const guard = { port, root, dataDir, dbFile, secretFiles };
+// Claude Code's own sandbox puts the private paths out of reach of every command an agent runs. It exists on
+// macOS, Linux and WSL2. Where it is missing, agents do not start while this is on, so it never fails quietly.
+if (process.env.DOT_AGENT_SANDBOX?.trim() === "on") setSandbox(sandboxSettings(guard));
 
 // In the Docker image the server runs as root and the agents as an unprivileged user (see isolation.ts).
 // Everything the server creates stays private to it. The folders agents work in are handed over below.
@@ -55,7 +84,7 @@ const store = new Store(db);
 // After the database exists, so the check can try to read it as the agent user. Refuses to start
 // when an agent could reach something private, rather than running agents quietly with too much access.
 try {
-  verifyIsolation([dbFile, `${dbFile}-wal`, `${dbFile}-shm`, resolve(dataDir, "session.json"), resolve(dataDir, "attachments"), backupsDir]);
+  verifyIsolation([dbFile, `${dbFile}-wal`, `${dbFile}-shm`, resolve(dataDir, "session.json"), resolve(dataDir, "attachments"), backupsDir, ...secretFiles]);
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
@@ -75,7 +104,7 @@ const orchestrator = new Orchestrator(store, bus, {
   stuckAfterMs: Math.max(0, Number(process.env.DOT_STUCK_MINUTES ?? 20)) * 60_000,
   // Outside any repo, so worktrees never show up as untracked files in your checkout.
   worktreesDir,
-  guardRules: guardRules({ port, root, dataDir, dbFile }),
+  guardRules: guardRules(guard),
 });
 orchestrator.recover();
 orchestrator.startUnblocked();

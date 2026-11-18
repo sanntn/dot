@@ -52,6 +52,12 @@ const LOGIN_URL_WAIT_MS = 15_000;
 // Named subscription tokens, one per account, from `claude setup-token`. They live in the server's
 // environment as DOT_CLAUDE_TOKEN_<NAME>, so no secret is stored in the database. Names are upper case.
 const TOKEN_PREFIX = "DOT_CLAUDE_TOKEN_";
+
+// Claude Code's own sandbox settings for every agent, set once at startup (DOT_AGENT_SANDBOX=on). Null leaves it off.
+let sandbox: object | null = null;
+export function setSandbox(settings: object | null): void {
+  sandbox = settings;
+}
 export const isTokenName = (name: string) => /^[A-Z0-9_]+$/.test(name);
 
 export function claudeTokenFor(name: string): string | null {
@@ -231,7 +237,7 @@ export class ClaudeProcess {
       // --settings still applies under --restricted. Empty attribution keeps the
       // "Co-Authored-By: Claude" line out of the agents' commits and pull requests.
       "--settings",
-      JSON.stringify({ attribution: { commit: "", pr: "" } }),
+      JSON.stringify({ attribution: { commit: "", pr: "" }, ...(sandbox ? { sandbox } : {}) }),
       "--strict-mcp-config",
       "--mcp-config",
       JSON.stringify({ mcpServers: { dot: { type: "http", url: options.mcpUrl } } }),
