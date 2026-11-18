@@ -163,6 +163,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX task_events_task ON task_events(task_id, id);
   `,
+  `
+  -- A project can cap what one task's agents spend. A task pauses once it has spent the budget since
+  -- its last pause (budget_checkpoint_usd), so resuming it grants another budget's worth.
+  ALTER TABLE projects ADD COLUMN task_budget_usd REAL;
+  ALTER TABLE tasks ADD COLUMN budget_checkpoint_usd REAL NOT NULL DEFAULT 0;
+  `,
 ];
 
 export type Db = DatabaseSync;

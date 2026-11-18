@@ -63,6 +63,8 @@ const projectFields = z.object({
   claudeConfigDir: optionalText,
   // The name of a token the server holds as DOT_CLAUDE_TOKEN_<NAME>. Null uses the default login.
   claudeToken: optionalText,
+  // Agents on a task pause and flag Needs input after this much API-price spend. Null means no limit.
+  taskBudgetUsd: z.number().positive("Use a number above 0, or leave it blank").max(100000).nullable().optional(),
 });
 
 // A hosted repository as "owner/name" (a Bitbucket workspace and repo slug work the same way).
@@ -102,6 +104,7 @@ export const ProjectSchema = z.object({
   devUrl: z.string().nullable(),
   claudeConfigDir: z.string().nullable(),
   claudeToken: z.string().nullable(),
+  taskBudgetUsd: z.number().nullable(),
   // True when the folder is a clone Dot made in its own repos folder, so deleting the project can remove it.
   cloned: z.boolean().optional(),
   // Set when the base branch asked for did not exist in the clone and Dot used the repo's default instead.

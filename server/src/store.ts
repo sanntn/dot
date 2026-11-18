@@ -57,6 +57,7 @@ const PROJECT_COLUMNS = {
   devUrl: "dev_url",
   claudeConfigDir: "claude_config_dir",
   claudeToken: "claude_token",
+  taskBudgetUsd: "task_budget_usd",
 } as const satisfies Record<keyof ProjectPatchData, string>;
 
 const now = () => new Date().toISOString();
@@ -87,6 +88,7 @@ function toProject(row: Row): Project {
     devUrl: row.dev_url as string | null,
     claudeConfigDir: row.claude_config_dir as string | null,
     claudeToken: row.claude_token as string | null,
+    taskBudgetUsd: row.task_budget_usd as number | null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -358,6 +360,18 @@ export class Store {
       .prepare("UPDATE tasks SET needs_input = ?, updated_at = ? WHERE id = ?")
       .run(needsInput ? 1 : 0, now(), taskId);
     return this.getTask(taskId);
+  }
+
+  // The task cost at its last budget pause. The budget counts what was spent after this.
+  budgetCheckpoint(taskId: number): number {
+    const row = this.db.prepare("SELECT budget_checkpoint_usd AS usd FROM tasks WHERE id = ?").get(taskId) as
+      | { usd: number }
+      | undefined;
+    return row?.usd ?? 0;
+  }
+
+  setBudgetCheckpoint(taskId: number, usd: number): void {
+    this.db.prepare("UPDATE tasks SET budget_checkpoint_usd = ? WHERE id = ?").run(usd, taskId);
   }
 
   // Runs

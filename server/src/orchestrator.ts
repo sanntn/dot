@@ -792,14 +792,40 @@ export class Orchestrator {
     if (event.type === "result") {
       const cost = typeof event.total_cost_usd === "number" ? event.total_cost_usd : 0;
       this.store.updateRun(live.runId, { costUsd: live.costBase + cost });
-      const projectId = this.store.getTask(live.taskId).projectId;
-      this.bus.publish({ type: "tasks.changed", projectId, taskId: live.taskId });
+      const task = this.store.getTask(live.taskId);
+      this.bus.publish({ type: "tasks.changed", projectId: task.projectId, taskId: live.taskId });
+      this.enforceBudget(live, task);
       if (event.is_error === true) {
         const detail = typeof event.result === "string" && event.result ? event.result : String(event.subtype ?? "error");
         this.store.addMessage({ taskId: live.taskId, runId: live.runId, role: "system", kind: "error", text: detail });
         this.bus.publish({ type: "messages.changed", taskId: live.taskId });
       }
     }
+  }
+
+  // Pauses the task once its agents have spent the project's budget since the last pause. The pause
+  // moves the checkpoint up, so resuming the task grants another budget's worth. A stage that has
+  // already handed in its result is left alone, since it is about to finish anyway.
+  private enforceBudget(live: Live, task: Task): void {
+    if (live.stopped || live.outcome) return;
+    const budget = this.store.getProject(task.projectId).taskBudgetUsd;
+    if (budget === null) return;
+    const checkpoint = this.store.budgetCheckpoint(task.id);
+    if (task.costUsd - checkpoint < budget) return;
+
+    this.store.setBudgetCheckpoint(task.id, task.costUsd);
+    this.store.setNeedsInput(task.id, true);
+    this.store.addMessage({
+      taskId: task.id,
+      runId: live.runId,
+      role: "system",
+      kind: "status",
+      text:
+        `Paused at the task budget. The agents have spent $${(task.costUsd - checkpoint).toFixed(2)} at API prices ` +
+        `since the last check, and the limit is $${budget.toFixed(2)}. Resume the agent or send a message to give it another $${budget.toFixed(2)}.`,
+    });
+    this.bus.publish({ type: "messages.changed", taskId: task.id });
+    void this.stop(task.id);
   }
 
   private onTurnEnd(live: Live): void {

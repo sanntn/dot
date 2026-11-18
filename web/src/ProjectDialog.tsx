@@ -90,6 +90,7 @@ export function ProjectDialog(props: {
       browserTesting: form.get("browserTesting") === "on",
       claudeConfigDir: text("claudeConfigDir") || null,
       claudeToken: claudeToken === "default" ? null : claudeToken,
+      taskBudgetUsd: text("taskBudgetUsd") === "" ? null : Number(text("taskBudgetUsd")),
       repoHost: source === "clone" && !project ? cloneHost : repoHost === "auto" ? null : repoHost,
       repoOwner: text("repoOwner") || null,
       repoName: text("repoName") || null,
@@ -248,6 +249,26 @@ export function ProjectDialog(props: {
               </Label>
             </div>
           </fieldset>
+
+          <div className="grid gap-2">
+            <Label htmlFor={`${id}-taskBudgetUsd`}>Budget per task (USD)</Label>
+            <Input
+              id={`${id}-taskBudgetUsd`}
+              name="taskBudgetUsd"
+              type="number"
+              inputMode="decimal"
+              min="0.01"
+              step="any"
+              defaultValue={project?.taskBudgetUsd ?? ""}
+              placeholder="No limit"
+              aria-describedby={`${id}-taskBudgetUsd-hint`}
+              className="max-w-40"
+            />
+            <p id={`${id}-taskBudgetUsd-hint`} className="text-xs text-muted-foreground">
+              A task pauses and asks for you when its agents have spent this much at API prices. Resuming gives it
+              another budget. Your subscription covers the real cost.
+            </p>
+          </div>
 
           <ClaudeAccountField
             id={`${id}-claudeConfigDir`}

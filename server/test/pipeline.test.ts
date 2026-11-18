@@ -208,6 +208,29 @@ test("a stage that ends without submitting is nudged once, then flagged", async 
   assert.ok(h.store.listMessages(h.task.id).some((m) => /stopped without a plan/.test(m.text)));
 });
 
+test("a task pauses at the project budget, and resuming grants another budget", async () => {
+  // Each fake launch reports $0.01, so a $0.005 budget trips on the first turn that has no result yet.
+  const h = await harness([
+    { turns: [[{ say: "Reading the code." }]] },
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
+  ]);
+  h.store.updateProject(h.task.projectId, { taskBudgetUsd: 0.005 });
+
+  h.orchestrator.startResearch(h.task.id);
+  const paused = await h.until("a budget pause", (t) => t.needsInput && t.agentState !== "running");
+  assert.equal(paused.column, "research");
+  assert.ok(h.store.listMessages(h.task.id).some((m) => /Paused at the task budget/.test(m.text)));
+  // The nudge for a missing plan must not have been sent.
+  assert.equal(h.calls().filter((c) => "prompt" in c).length, 1);
+
+  // The resumed researcher hands in its plan in the same turn it overspends, so it is not cut off.
+  h.orchestrator.resumeResearch(h.task.id);
+  const planned = await h.until("plan review", (t) => t.column === "plan_review");
+  assert.equal(planned.needsInput, false);
+  // Let the process finish, so cleanup does not remove the repo under its ref audit.
+  await h.until("the researcher to exit", (t) => t.agentState === "idle");
+});
+
 test("a reviewer that requests changes sends the task back to the executor", async () => {
   const h = await harness([
     { turns: [[{ tool: "submit_plan", args: plan }]] },
