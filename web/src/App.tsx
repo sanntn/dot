@@ -62,9 +62,18 @@ function storeProject(id: number) {
 
 export function App() {
   const [projects, setProjects] = useState<Project[] | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(readStoredProject);
+  // A link from a webhook message, /?project=1&task=7, opens that task once. The address is then cleaned up.
+  const [link] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const project = Number(params.get("project"));
+    const task = Number(params.get("task"));
+    if (!Number.isInteger(project) || !Number.isInteger(task) || project <= 0 || task <= 0) return null;
+    window.history.replaceState(null, "", window.location.pathname);
+    return { project, task };
+  });
+  const [selectedId, setSelectedId] = useState<number | null>(() => link?.project ?? readStoredProject());
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [dialog, setDialog] = useState<OpenDialog | null>(null);
+  const [dialog, setDialog] = useState<OpenDialog | null>(() => (link ? { kind: "task", taskId: link.task } : null));
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const announceTimer = useRef<number | undefined>(undefined);

@@ -11,6 +11,7 @@ import { EventBus } from "./events.ts";
 import { guardRules } from "./agents/guards.ts";
 import { configureTransport } from "./git.ts";
 import { agentDir, isolated, verifyIsolation } from "./isolation.ts";
+import { startNotifier } from "./notify.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { Store } from "./store.ts";
 
@@ -78,6 +79,19 @@ const orchestrator = new Orchestrator(store, bus, {
 });
 orchestrator.recover();
 orchestrator.startUnblocked();
+
+// A message to a webhook when a task starts waiting for you. Off unless DOT_NOTIFY_URL is set.
+const notifyUrl = process.env.DOT_NOTIFY_URL?.trim();
+if (notifyUrl) {
+  process.on(
+    "exit",
+    startNotifier(store, bus, {
+      url: notifyUrl,
+      format: process.env.DOT_NOTIFY_FORMAT?.trim() === "text" ? "text" : "json",
+      appUrl: process.env.DOT_PUBLIC_URL?.trim() || undefined,
+    }),
+  );
+}
 
 // Don't leave claude processes running when Dot stops or restarts.
 process.on("exit", () => orchestrator.shutdown());

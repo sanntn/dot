@@ -35,6 +35,9 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 | `DOT_PORT` | `4317` | API port |
 | `DOT_DB` | `data/dot.db` | Database file |
 | `DOT_BACKUP_KEEP` | `7` | How many daily database backups to keep in `data/backups`. `0` turns backups off. |
+| `DOT_NOTIFY_URL` | none | A webhook that gets a message when a task starts waiting for you: a question, a failure, a plan to review or a change to merge. Works with ntfy, Slack and Discord incoming webhooks, or any endpoint that takes a JSON POST. |
+| `DOT_NOTIFY_FORMAT` | `json` | `json` sends `text`, `content` and the task's fields. Use `text` for ntfy, which takes a plain body and a title header. |
+| `DOT_PUBLIC_URL` | none | The address you open Dot at. When set, notifications link straight to the task. |
 | `DOT_BITBUCKET_TOKEN` | none | Bitbucket token for the merge step. Required to merge Bitbucket projects. |
 | `DOT_BITBUCKET_EMAIL` | none | Your Atlassian account email, when the token is an Atlassian API token. Leave it out for a repository or workspace access token. |
 | `DOT_GITHUB_TOKEN` | none | GitHub personal access token for the merge step. Required to merge GitHub projects. |
