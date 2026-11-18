@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
+import { BlockerPicker } from "./BlockerPicker.tsx";
 import { parseList } from "./pasteList.ts";
 
 // Creates a task, or several from a pasted list. Editing happens in the task panel's Details tab.
@@ -182,30 +183,7 @@ export function TaskDialog(props: {
 
               <TaskFields key={fill.n} id={id} title={fill.title} description={fill.description} />
 
-              {openTasks.length > 0 && (
-                <fieldset className="grid gap-2">
-                  <legend className="text-sm font-medium">Blocked by</legend>
-                  <p className="text-xs text-muted-foreground">The task cannot start until these are done.</p>
-                  <ul className="grid max-h-32 gap-1 overflow-y-auto rounded-md border p-2">
-                    {openTasks.map((t) => (
-                      <li key={t.id}>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            className="size-4 accent-primary"
-                            checked={blockers.includes(t.id)}
-                            onChange={(e) =>
-                              setBlockers((prev) => (e.target.checked ? [...prev, t.id] : prev.filter((x) => x !== t.id)))
-                            }
-                          />
-                          <span className="tabular-nums text-muted-foreground">#{t.number}</span>
-                          <span className="truncate">{t.title}</span>
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                </fieldset>
-              )}
+              <BlockerPicker candidates={openTasks} value={blockers} onChange={setBlockers} />
 
               <div className="grid gap-2">
                 <Label htmlFor={`${id}-images`}>Images</Label>

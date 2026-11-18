@@ -106,6 +106,8 @@ export const api = {
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
 
   // kind "task" images go to the researcher with the task's brief. Chat images (the default) go with a message.
+  listTaskImages: (taskId: number) => request<AttachmentRef[]>(`/tasks/${taskId}/attachments`),
+  deleteTaskImage: (id: number) => request<void>(`/attachments/${id}`, "DELETE"),
   uploadAttachment: (taskId: number, file: File, kind: "chat" | "task" = "chat") =>
     send<AttachmentRef>(`/tasks/${taskId}/attachments${kind === "task" ? "?kind=task" : ""}`, {
       method: "POST",

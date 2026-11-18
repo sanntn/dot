@@ -548,8 +548,28 @@ export function createApp(
     writeFileSync(path, bytes);
 
     const origin = c.req.query("kind") === "task" ? "task" : "chat";
+    if (origin === "task" && store.taskAttachments(taskId).length >= 5) {
+      rmSync(path, { force: true });
+      throw new HttpError(400, "A task can have at most 5 images");
+    }
     const attachment = store.addAttachment({ taskId, fileName, mediaType, size: bytes.length, path, origin });
     return c.json({ id: attachment.id, fileName: attachment.fileName, mediaType: attachment.mediaType }, 201);
+  });
+
+  app.get("/tasks/:id/attachments", (c) => {
+    const id = idParam(c);
+    store.getTask(id);
+    return c.json(store.taskAttachments(id).map((a) => ({ id: a.id, fileName: a.fileName, mediaType: a.mediaType })));
+  });
+
+  app.delete("/attachments/:id", (c) => {
+    const path = store.removeTaskAttachment(idParam(c));
+    try {
+      rmSync(path, { force: true });
+    } catch (err) {
+      console.error("Could not remove an attachment file:", err);
+    }
+    return c.body(null, 204);
   });
 
   app.get("/attachments/:id", (c) => {

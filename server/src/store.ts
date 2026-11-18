@@ -592,6 +592,15 @@ export class Store {
     return ids.map((r) => this.getAttachment(r.id));
   }
 
+  // Removes an image added with the task. Chat images stay, since messages point at them.
+  removeTaskAttachment(id: number): string {
+    const attachment = this.getAttachment(id);
+    const row = this.db.prepare("SELECT origin FROM attachments WHERE id = ?").get(id) as { origin: string };
+    if (row.origin !== "task") throw new HttpError(400, "Only images attached to the task can be removed");
+    this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
+    return attachment.path;
+  }
+
   // Templates
 
   listTemplates(projectId: number): TaskTemplate[] {

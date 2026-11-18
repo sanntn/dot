@@ -24,6 +24,7 @@ import { ActivityPanel } from "./ActivityPanel.tsx";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { api, errorMessage } from "./api.ts";
 import { cn } from "@/lib/utils";
+import { BlockerPicker } from "./BlockerPicker.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { ChatPanel } from "./ChatPanel.tsx";
 import { ConfirmButton } from "./ConfirmButton.tsx";
@@ -31,6 +32,7 @@ import { serialLoader, subscribe } from "./events.ts";
 import { PlanPanel } from "./PlanPanel.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { TaskFields } from "./TaskDialog.tsx";
+import { TaskImages } from "./TaskImages.tsx";
 
 type Tab = "chat" | "plan" | "changes" | "review" | "activity" | "details";
 
@@ -52,7 +54,7 @@ function initialTab(task: Task): Tab {
 }
 
 // The task panel. Mounted to open; onClose runs after the close animation.
-export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }) {
+export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[]; onClose: () => void }) {
   const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<Tab>(() => initialTab(task));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -347,7 +349,7 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
             <ActivityPanel taskId={task.id} runs={runs} messages={messages} />
           </TabsContent>
           <TabsContent value="details" forceMount className="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
-            <TaskDetails task={task} onDeleted={() => setOpen(false)} />
+            <TaskDetails task={task} tasks={tasks} onDeleted={() => setOpen(false)} />
           </TabsContent>
         </Tabs>
       </SheetContent>
@@ -355,8 +357,10 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
   );
 }
 
-function TaskDetails({ task, onDeleted }: { task: Task; onDeleted: () => void }) {
+function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; onDeleted: () => void }) {
   const id = useId();
+  const [blockers, setBlockers] = useState<number[]>(() => task.blockedBy.map((b) => b.id));
+  const candidates = tasks.filter((t) => t.id !== task.id && (t.column !== "done" || blockers.includes(t.id)));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -384,6 +388,7 @@ function TaskDetails({ task, onDeleted }: { task: Task; onDeleted: () => void })
       await api.updateTask(task.id, {
         title: String(form.get("title") ?? ""),
         description: String(form.get("description") ?? ""),
+        blockedBy: blockers,
       });
       if (column && column !== task.column) await api.moveTask(task.id, { column, beforeTaskId: null });
     }).then((ok) => setSaved(ok));
@@ -392,6 +397,8 @@ function TaskDetails({ task, onDeleted }: { task: Task; onDeleted: () => void })
   return (
     <form className="grid gap-5 p-4" onSubmit={onSubmit}>
       <TaskFields id={id} title={task.title} description={task.description} />
+      <BlockerPicker candidates={candidates} value={blockers} onChange={setBlockers} />
+      <TaskImages taskId={task.id} locked={busy} />
       <div className="grid gap-2">
         <Label htmlFor={`${id}-column`}>Column</Label>
         <p className="-mt-1 text-xs text-muted-foreground">
