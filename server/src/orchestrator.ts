@@ -63,6 +63,10 @@ export type OrchestratorConfig = {
   worktreesDir: string;
   // Deny rules every agent gets, see agents/guards.ts.
   guardRules: string[];
+  // An agent mid-turn that sends nothing for this long is stopped and flagged. 0 turns the check off.
+  stuckAfterMs?: number;
+  // How often the check runs.
+  stuckCheckMs?: number;
 };
 
 // The column a stage's agent works in. Outside it, the agent is only chatting.
@@ -129,6 +133,8 @@ type Live = {
   // Messages sent to the process whose turn has not ended yet. Each message gets its own turn, so a
   // message sent mid-turn must not make the earlier turn's end look like a stall.
   turnsInFlight: number;
+  // When the process last sent an event or was last given a message.
+  lastActivity: number;
   costBase: number;
   // Messages that arrived while no process could take them. The next launch sends them.
   pending: ContentBlock[][];
@@ -157,6 +163,7 @@ export class Orchestrator {
     private readonly bus: EventBus,
     private readonly config: OrchestratorConfig,
   ) {
+    this.startStuckWatch();
     this.mergeStep = new MergeStep(store, {
       publish: (taskId) => this.publish(taskId),
       stop: (taskId) => this.stop(taskId),
@@ -460,8 +467,41 @@ export class Orchestrator {
     await Promise.race([Promise.all(exits), new Promise((r) => setTimeout(r, 5000))]);
   }
 
+  private stuckTimer: NodeJS.Timeout | null = null;
+
+  private startStuckWatch(): void {
+    const after = this.config.stuckAfterMs ?? 20 * 60_000;
+    if (after <= 0) return;
+    this.stuckTimer = setInterval(() => this.checkStuck(after), this.config.stuckCheckMs ?? 30_000);
+    this.stuckTimer.unref();
+  }
+
+  // An agent that is mid-turn but has said nothing for a long time is hung, usually on a stalled network
+  // call or a command that never ends. Stop it and flag the task. Resuming starts it again in its session.
+  private checkStuck(after: number): void {
+    const stuck = [...this.live.values()].filter(
+      (l) => l.process && !l.stopped && l.turnsInFlight > 0 && Date.now() - l.lastActivity >= after,
+    );
+    for (const live of stuck) {
+      this.safely(live.taskId, () => {
+        const minutes = Math.max(1, Math.round((Date.now() - live.lastActivity) / 60_000));
+        this.store.setNeedsInput(live.taskId, true);
+        this.store.addMessage({
+          taskId: live.taskId,
+          runId: live.runId,
+          role: "system",
+          kind: "status",
+          text: `Stopped: the ${STAGE_LABELS[live.stage].toLowerCase()} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}. It may be hung on a command or a network call. Resume it or send a message to start it again.`,
+        });
+        this.bus.publish({ type: "messages.changed", taskId: live.taskId });
+        void this.stop(live.taskId);
+      });
+    }
+  }
+
   // Kill every agent process. Called on server shutdown so no claude process outlives Dot.
   shutdown(): void {
+    if (this.stuckTimer) clearInterval(this.stuckTimer);
     for (const live of this.live.values()) {
       live.stopped = true;
       live.process?.kill();
@@ -563,6 +603,7 @@ export class Orchestrator {
         outcome: false,
         nudged: false,
         turnsInFlight: 0,
+        lastActivity: Date.now(),
         costBase: run.costUsd,
         pending: [],
         stopped: false,
@@ -595,6 +636,7 @@ export class Orchestrator {
 
     if (live.process?.acceptingInput) {
       live.turnsInFlight++;
+      live.lastActivity = Date.now();
       live.process.send(content);
       return;
     }
@@ -669,6 +711,7 @@ export class Orchestrator {
     this.store.updateRun(run.id, { status: "running", error: null });
     this.store.setAgentState(task.id, "running");
 
+    live.lastActivity = Date.now();
     live.exited = new Promise((resolve) => (live.resolveExited = resolve));
     // The executor, and the reviewer through the project's commands, run code from the task branch,
     // so both are audited while working. The snapshot runs while the CLI starts up, which takes
@@ -755,6 +798,7 @@ export class Orchestrator {
   }
 
   private onEvent(live: Live, event: StreamEvent, cwd: string): void {
+    live.lastActivity = Date.now();
     if (event.type === "system" && event.subtype === "init") {
       this.store.markSessionStarted(live.runId);
       return;

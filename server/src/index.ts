@@ -61,6 +61,8 @@ const orchestrator = new Orchestrator(store, bus, {
   port,
   maxAgents: Math.max(1, Number(process.env.DOT_MAX_AGENTS ?? 2)),
   model: process.env.DOT_MODEL ?? "opus",
+  // Minutes of silence before a working agent is stopped and flagged. 0 turns the check off.
+  stuckAfterMs: Math.max(0, Number(process.env.DOT_STUCK_MINUTES ?? 20)) * 60_000,
   // Outside any repo, so worktrees never show up as untracked files in your checkout.
   worktreesDir,
   guardRules: guardRules({ port, root, dataDir, dbFile }),

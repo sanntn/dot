@@ -20,7 +20,7 @@ import { Store } from "../src/store.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-type Step = { say: string } | { tool: string; args?: unknown } | { commit: { file: string; content: string; message: string } };
+type Step = { say: string } | { hang: true } | { tool: string; args?: unknown } | { commit: { file: string; content: string; message: string } };
 type Launch = { name?: string; turns: Step[][] };
 
 const plan = {
@@ -59,7 +59,7 @@ after(async () => {
   for (const fn of cleanups.reverse()) await fn();
 });
 
-async function harness(launches: Launch[]) {
+async function harness(launches: Launch[], extra: Partial<ConstructorParameters<typeof Orchestrator>[2]> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "dot-pipeline-"));
   const binDir = join(dir, "bin");
   mkdirSync(binDir);
@@ -85,6 +85,7 @@ async function harness(launches: Launch[]) {
     model: "fake",
     worktreesDir: join(dir, "worktrees"),
     guardRules: [],
+    ...extra,
   });
   const app = createApp(store, bus, orchestrator, {
     attachmentsDir: join(dir, "attachments"),
@@ -247,6 +248,15 @@ test("each stage runs on the project's model for it, or the server default", asy
   const models = h.calls().filter((c) => "prompt" in c).map((c) => c.model);
   assert.deepEqual(models, ["fake", "sonnet", "haiku"]);
   await h.until("the reviewer to exit", (t) => t.agentState === "idle");
+});
+
+test("an agent that goes silent mid-turn is stopped and flagged", async () => {
+  const h = await harness([{ turns: [[{ say: "Starting." }, { hang: true }]] }], { stuckAfterMs: 300, stuckCheckMs: 50 });
+
+  h.orchestrator.startResearch(h.task.id);
+  const flagged = await h.until("a stuck flag", (t) => t.needsInput && t.agentState !== "running");
+  assert.equal(flagged.column, "research");
+  assert.ok(h.store.listMessages(h.task.id).some((m) => /sent nothing for/.test(m.text)));
 });
 
 test("a reviewer that requests changes sends the task back to the executor", async () => {

@@ -5,6 +5,7 @@
 // says what to do for each user message the launch receives. A turn is a list of steps:
 //   { say: "text" }                                  an assistant message
 //   { tool: "submit_plan", args: { ... } }           a call to Dot's MCP endpoint
+//   { hang: true }                                   never end the turn, as a hung process would
 //   { commit: { file, content, message } }           a commit in the working directory
 // What each launch saw goes to calls.jsonl, so tests can check the prompts and the working directory.
 import { execFileSync } from "node:child_process";
@@ -53,7 +54,9 @@ lines.on("line", (line) => {
     turn += 1;
 
     for (const step of steps) {
-      if (step.say) {
+      if (step.hang) {
+        await new Promise(() => {});
+      } else if (step.say) {
         out({ type: "assistant", message: { content: [{ type: "text", text: step.say }] } });
       } else if (step.commit) {
         const { file, content, message: subject } = step.commit;
