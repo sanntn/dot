@@ -10,8 +10,11 @@ import { HttpError } from "./errors.ts";
 // shows up as an empty widget with a message, not a crash. The token stays on the server.
 
 const ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
-const CACHE_MS = 60_000;
+const CACHE_MS = 3 * 60_000;
+const DEFAULT_BACKOFF_MS = 5 * 60_000;
+const MAX_BACKOFF_MS = 30 * 60_000;
 const cache = new Map<string, { at: number; usage: ClaudeUsage }>();
+const blockedUntil = new Map<string, number>();
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : null);
@@ -114,6 +117,12 @@ export async function claudeUsage(configDir: string | null, tokenName: string | 
   const key = `${tokenName ?? ""}|${configDir ?? ""}`;
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.usage;
+  // After a 429, stay quiet until Anthropic says to come back. Asking again only extends the wait.
+  const wait = (blockedUntil.get(key) ?? 0) - Date.now();
+  if (wait > 0) {
+    if (cached) return cached.usage;
+    throw new HttpError(422, `Anthropic is limiting how often limits can be checked. Try again in ${Math.ceil(wait / 60_000)} min.`);
+  }
 
   const token =
     (tokenName ? claudeTokenFor(tokenName) : null) ||
@@ -136,9 +145,17 @@ export async function claudeUsage(configDir: string | null, tokenName: string | 
       "This login can't read limits. Tokens from claude setup-token only cover inference. Use a browser login (claude auth login) for this account.",
     );
   }
+  if (res.status === 429) {
+    const seconds = Number(res.headers.get("retry-after"));
+    const backoff = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : DEFAULT_BACKOFF_MS;
+    blockedUntil.set(key, Date.now() + Math.min(backoff, MAX_BACKOFF_MS));
+  }
   if (!res.ok) {
-    // A rate-limited or failing endpoint still has a fresh-enough answer from a minute ago.
+    // A rate-limited or failing endpoint still has an answer from earlier. Show it instead of an error.
     if (cached) return cached.usage;
+    if (res.status === 429) {
+      throw new HttpError(422, `Anthropic is limiting how often limits can be checked. Try again in ${Math.ceil((blockedUntil.get(key)! - Date.now()) / 60_000)} min.`);
+    }
     throw new HttpError(422, `Anthropic answered ${res.status} when asked for limits`);
   }
 
