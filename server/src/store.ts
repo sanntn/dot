@@ -58,6 +58,9 @@ const PROJECT_COLUMNS = {
   claudeConfigDir: "claude_config_dir",
   claudeToken: "claude_token",
   taskBudgetUsd: "task_budget_usd",
+  researchModel: "research_model",
+  executeModel: "execute_model",
+  reviewModel: "review_model",
 } as const satisfies Record<keyof ProjectPatchData, string>;
 
 const now = () => new Date().toISOString();
@@ -89,6 +92,9 @@ function toProject(row: Row): Project {
     claudeConfigDir: row.claude_config_dir as string | null,
     claudeToken: row.claude_token as string | null,
     taskBudgetUsd: row.task_budget_usd as number | null,
+    researchModel: row.research_model as string | null,
+    executeModel: row.execute_model as string | null,
+    reviewModel: row.review_model as string | null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };

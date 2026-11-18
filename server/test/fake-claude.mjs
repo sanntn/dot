@@ -49,7 +49,7 @@ lines.on("line", (line) => {
     const message = JSON.parse(line);
     const text = message.message.content.map((b) => b.text ?? "").join("\n");
     const steps = launch.turns[turn] ?? [];
-    log({ launch: launch.name ?? null, turn, cwd: process.cwd(), prompt: text, resume: args.includes("--resume") });
+    log({ launch: launch.name ?? null, turn, cwd: process.cwd(), prompt: text, resume: args.includes("--resume"), model: flag("--model") });
     turn += 1;
 
     for (const step of steps) {

@@ -8,6 +8,7 @@ import {
   type ChatMessage,
   type Column,
   type Plan,
+  type Project,
   type Run,
   type Task,
 } from "@dot/shared";
@@ -617,6 +618,12 @@ export class Orchestrator {
     }
   }
 
+  // The project's model for the stage, or the server default.
+  private modelFor(project: Project, stage: AgentStage): string {
+    const chosen = { research: project.researchModel, execute: project.executeModel, review: project.reviewModel }[stage];
+    return chosen ?? this.config.model;
+  }
+
   private launch(live: Live): void {
     const run = this.store.getRun(live.runId);
     const task = this.store.getTask(run.taskId);
@@ -674,7 +681,7 @@ export class Orchestrator {
         cwd,
         sessionId: run.sessionId,
         resume,
-        model: this.config.model,
+        model: this.modelFor(project, run.stage),
         appendSystemPrompt: stage.systemPrompt,
         tools: stage.tools,
         allowedTools: stage.allowedTools,

@@ -1,4 +1,4 @@
-import { REPO_HOST_LABELS, type ClaudeAccount, type ClaudeTokens, type Project, type ProjectInput, type RemoteInfo, type RepoHost } from "@dot/shared";
+import { MODEL_CHOICES, REPO_HOST_LABELS, STAGE_LABELS, type AgentStage, type ClaudeAccount, type ClaudeTokens, type Project, type ProjectInput, type RemoteInfo, type RepoHost } from "@dot/shared";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,12 @@ export function ProjectDialog(props: {
   const [baseBranch, setBaseBranch] = useState(project?.baseBranch ?? "main");
   // "default" means no named token. Otherwise the name of a DOT_CLAUDE_TOKEN_<NAME> variable.
   const [claudeToken, setClaudeToken] = useState(project?.claudeToken ?? "default");
+  // "default" means the server's model. Otherwise an alias, or a full model name set through the API.
+  const [models, setModels] = useState<Record<AgentStage, string>>({
+    research: project?.researchModel ?? "default",
+    execute: project?.executeModel ?? "default",
+    review: project?.reviewModel ?? "default",
+  });
 
   useEffect(() => {
     if (project) return;
@@ -91,6 +97,9 @@ export function ProjectDialog(props: {
       claudeConfigDir: text("claudeConfigDir") || null,
       claudeToken: claudeToken === "default" ? null : claudeToken,
       taskBudgetUsd: text("taskBudgetUsd") === "" ? null : Number(text("taskBudgetUsd")),
+      researchModel: models.research === "default" ? null : models.research,
+      executeModel: models.execute === "default" ? null : models.execute,
+      reviewModel: models.review === "default" ? null : models.review,
       repoHost: source === "clone" && !project ? cloneHost : repoHost === "auto" ? null : repoHost,
       repoOwner: text("repoOwner") || null,
       repoName: text("repoName") || null,
@@ -248,6 +257,38 @@ export function ProjectDialog(props: {
                 Reviewer tests UI changes in a browser, using the dev server command and URL
               </Label>
             </div>
+          </fieldset>
+
+          <fieldset className="grid gap-3">
+            <legend className="mb-1 text-sm font-medium">Model per stage</legend>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {(["research", "execute", "review"] as const).map((stage) => {
+                const value = models[stage];
+                const custom = value !== "default" && !(MODEL_CHOICES as readonly string[]).includes(value);
+                return (
+                  <div key={stage} className="grid gap-2">
+                    <Label htmlFor={`${id}-model-${stage}`}>{STAGE_LABELS[stage]}</Label>
+                    <Select value={value} onValueChange={(v) => setModels((m) => ({ ...m, [stage]: v }))}>
+                      <SelectTrigger id={`${id}-model-${stage}`} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="default">Server default</SelectItem>
+                        {MODEL_CHOICES.map((m) => (
+                          <SelectItem key={m} value={m}>
+                            {m[0]!.toUpperCase() + m.slice(1)}
+                          </SelectItem>
+                        ))}
+                        {custom && <SelectItem value={value}>{value}</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A cheaper model for research or review saves usage. A running agent keeps its model until it restarts.
+            </p>
           </fieldset>
 
           <div className="grid gap-2">

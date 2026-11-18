@@ -231,6 +231,24 @@ test("a task pauses at the project budget, and resuming grants another budget", 
   await h.until("the researcher to exit", (t) => t.agentState === "idle");
 });
 
+test("each stage runs on the project's model for it, or the server default", async () => {
+  const h = await harness([
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
+    { turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+  h.store.updateProject(h.task.projectId, { executeModel: "sonnet", reviewModel: "haiku" });
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", h.inColumn("plan_review"));
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("merge approval", h.inColumn("merge_approval"));
+
+  const models = h.calls().filter((c) => "prompt" in c).map((c) => c.model);
+  assert.deepEqual(models, ["fake", "sonnet", "haiku"]);
+  await h.until("the reviewer to exit", (t) => t.agentState === "idle");
+});
+
 test("a reviewer that requests changes sends the task back to the executor", async () => {
   const h = await harness([
     { turns: [[{ tool: "submit_plan", args: plan }]] },

@@ -43,6 +43,16 @@ export type RemoteInfo = {
   name: string | null;
 };
 
+// Aliases the model picker offers. A project may also hold a full model name set through the API.
+export const MODEL_CHOICES = ["opus", "sonnet", "haiku"] as const;
+const modelName = z
+  .string()
+  .trim()
+  .max(100)
+  .regex(/^[\w.\-[\]]*$/, "Use letters, digits, dots, dashes and brackets")
+  .nullable()
+  .optional();
+
 // Fields shared by create and patch. Defaults live only on the create schema,
 // so a patch never resets a field the client left out.
 const projectFields = z.object({
@@ -65,6 +75,10 @@ const projectFields = z.object({
   claudeToken: optionalText,
   // Agents on a task pause and flag Needs input after this much API-price spend. Null means no limit.
   taskBudgetUsd: z.number().positive("Use a number above 0, or leave it blank").max(100000).nullable().optional(),
+  // The model each stage runs on: an alias such as "sonnet" or a full model name. Null uses the server default.
+  researchModel: modelName,
+  executeModel: modelName,
+  reviewModel: modelName,
 });
 
 // A hosted repository as "owner/name" (a Bitbucket workspace and repo slug work the same way).
@@ -105,6 +119,9 @@ export const ProjectSchema = z.object({
   claudeConfigDir: z.string().nullable(),
   claudeToken: z.string().nullable(),
   taskBudgetUsd: z.number().nullable(),
+  researchModel: z.string().nullable(),
+  executeModel: z.string().nullable(),
+  reviewModel: z.string().nullable(),
   // True when the folder is a clone Dot made in its own repos folder, so deleting the project can remove it.
   cloned: z.boolean().optional(),
   // Set when the base branch asked for did not exist in the clone and Dot used the repo's default instead.

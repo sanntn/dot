@@ -169,6 +169,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE projects ADD COLUMN task_budget_usd REAL;
   ALTER TABLE tasks ADD COLUMN budget_checkpoint_usd REAL NOT NULL DEFAULT 0;
   `,
+  `
+  -- Each stage can run on its own model. NULL uses the server default.
+  ALTER TABLE projects ADD COLUMN research_model TEXT;
+  ALTER TABLE projects ADD COLUMN execute_model TEXT;
+  ALTER TABLE projects ADD COLUMN review_model TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;
