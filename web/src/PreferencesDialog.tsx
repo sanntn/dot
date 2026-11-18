@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, errorMessage } from "./api.ts";
+import { setFullDetail, useFullDetail } from "./detail.tsx";
 import { notificationsEnabled, notificationsSupported, setNotifications } from "./notifications.ts";
 
 export function PreferencesDialog({ projectId, onClose }: { projectId: number | null; onClose: () => void }) {
   const [on, setOn] = useState(notificationsEnabled);
+  const fullDetail = useFullDetail();
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
   const [error, setError] = useState<string | null>(null);
   const supported = notificationsSupported();
@@ -59,6 +61,21 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
           <div>
             <Button variant="outline" disabled={!supported || blocked} aria-pressed={on} onClick={() => void toggle()}>
               {on ? "Turn off notifications" : "Turn on notifications"}
+            </Button>
+          </div>
+        </section>
+
+        <section className="grid gap-2" aria-labelledby="detail-heading">
+          <h3 id="detail-heading" className="text-sm font-semibold">
+            Detail
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Plans, reports, reviews and chat replies show the main points first and fold the rest away. Turn this on to
+            open everything by default.
+          </p>
+          <div>
+            <Button variant="outline" aria-pressed={fullDetail} onClick={() => setFullDetail(!fullDetail)}>
+              {fullDetail ? "Show main points only" : "Show full detail"}
             </Button>
           </div>
         </section>

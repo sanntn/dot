@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api, attachmentUrl, errorMessage } from "./api.ts";
+import { ClampedProse } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 export type ArtifactTab = "plan" | "changes" | "review";
@@ -388,5 +389,6 @@ function MessageView(props: {
     );
   }
 
-  return <Prose className="text-sm">{m.text}</Prose>;
+  // Long agent replies are cut after about ten lines. A question stays whole, because you answer it.
+  return <ClampedProse className="text-sm" maxHeight={240}>{m.text}</ClampedProse>;
 }

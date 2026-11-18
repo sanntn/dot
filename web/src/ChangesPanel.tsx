@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { api, errorMessage } from "./api.ts";
 import { serialLoader } from "./events.ts";
+import { ClampedProse, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 // The executor's report, the branch's commits and its diff against the base branch.
@@ -123,33 +124,51 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
 
 function ReportView({ artifact }: { artifact: ExecutionArtifact }) {
   const { report } = artifact;
+  const problemChecks = report.verification.filter((v) => v.result !== "passed");
+  const passedChecks = report.verification.filter((v) => v.result === "passed");
   return (
     <section className="flex min-w-0 flex-col gap-4">
       <div className="flex min-w-0 flex-col gap-2">
         <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Execution report</h3>
-        <Prose className="text-sm">{report.summary}</Prose>
+        <ClampedProse className="text-sm">{report.summary}</ClampedProse>
       </div>
 
-      {report.verification.length > 0 && (
-        <div className="flex min-w-0 flex-col gap-2">
-          <h4 className="text-xs font-medium text-muted-foreground">Checks</h4>
-          <ul className="grid gap-2 text-sm">
-            {report.verification.map((v, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <CheckIcon result={v.result} />
-                <div className="grid min-w-0 gap-0.5">
-                  <code className="font-mono text-xs [overflow-wrap:anywhere]">{v.command}</code>
-                  {v.notes && <span className="text-xs text-muted-foreground">{v.notes}</span>}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       <Bullets title="Deviations from the plan" items={report.deviations} />
-      <Bullets title="Follow-ups" items={report.followUps} />
+      {problemChecks.length > 0 && <Checks title="Checks that did not pass" checks={problemChecks} />}
+
+      {(passedChecks.length > 0 || report.followUps.length > 0) && (
+        <MoreDetails
+          label={[
+            passedChecks.length ? `${passedChecks.length} passed ${passedChecks.length === 1 ? "check" : "checks"}` : "",
+            report.followUps.length ? `${report.followUps.length} follow-up${report.followUps.length === 1 ? "" : "s"}` : "",
+          ]
+            .filter(Boolean)
+            .join(", ")}
+        >
+          {passedChecks.length > 0 && <Checks title="Checks" checks={passedChecks} />}
+          <Bullets title="Follow-ups" items={report.followUps} />
+        </MoreDetails>
+      )}
     </section>
+  );
+}
+
+function Checks({ title, checks }: { title: string; checks: ExecutionArtifact["report"]["verification"] }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <h4 className="text-xs font-medium text-muted-foreground">{title}</h4>
+      <ul className="grid gap-2 text-sm">
+        {checks.map((v, i) => (
+          <li key={i} className="flex items-start gap-2">
+            <CheckIcon result={v.result} />
+            <div className="grid min-w-0 gap-0.5">
+              <code className="font-mono text-xs [overflow-wrap:anywhere]">{v.command}</code>
+              {v.notes && <span className="text-xs text-muted-foreground">{v.notes}</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

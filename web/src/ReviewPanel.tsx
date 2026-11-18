@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
 import { CheckIcon } from "./ChangesPanel.tsx";
+import { ClampedProse, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
 export function ReviewPanel({ task, artifact, working }: { task: Task; artifact: ReviewArtifact | null; working: boolean }) {
@@ -38,6 +39,8 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
 
   const blocking = artifact?.review.issues.filter((i) => i.severity === "blocking") ?? [];
   const optional = artifact?.review.issues.filter((i) => i.severity === "non_blocking") ?? [];
+  const failedChecks = artifact?.review.checks.filter((c) => c.result === "failed") ?? [];
+  const allMet = artifact !== null && artifact.review.criteria.every((c) => c.status === "met");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -66,19 +69,18 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
 
             <Prose className="text-sm">{artifact.review.summary}</Prose>
 
-            <Section title="Acceptance criteria">
-              <ul className="flex flex-col gap-3 text-sm">
-                {artifact.review.criteria.map((c, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <CriterionIcon status={c.status} />
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <Prose>{c.criterion}</Prose>
-                      <Prose className="text-xs text-muted-foreground">{c.evidence}</Prose>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </Section>
+            {allMet ? (
+              <p className="flex items-center gap-2 text-sm">
+                <CriterionIcon status="met" />
+                {artifact.review.criteria.length === 1
+                  ? "The acceptance criterion is met."
+                  : `All ${artifact.review.criteria.length} acceptance criteria are met.`}
+              </p>
+            ) : (
+              <Section title="Acceptance criteria">
+                <CriteriaList criteria={artifact.review.criteria} />
+              </Section>
+            )}
 
             {blocking.length > 0 && (
               <Section title={`Blocking issues (${blocking.length})`}>
@@ -88,28 +90,32 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
               </Section>
             )}
 
-            {optional.length > 0 && (
-              <Section title={`Non-blocking (${optional.length})`}>
-                {optional.map((issue, i) => (
-                  <IssueCard key={i} issue={issue} task={task} canCreateTask />
-                ))}
+            {failedChecks.length > 0 && (
+              <Section title={`Failed checks (${failedChecks.length})`}>
+                <ChecksList checks={failedChecks} />
               </Section>
             )}
 
-            {artifact.review.checks.length > 0 && (
-              <Section title="Checks">
-                <ul className="flex flex-col gap-2 text-sm">
-                  {artifact.review.checks.map((v, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <CheckIcon result={v.result} />
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <code className="font-mono text-xs [overflow-wrap:anywhere]">{v.command}</code>
-                        {v.notes && <span className="text-xs text-muted-foreground">{v.notes}</span>}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </Section>
+            {(allMet || optional.length > 0 || artifact.review.checks.length > 0) && (
+              <MoreDetails label={detailLabel(allMet, optional.length, artifact.review.checks.length)} className="gap-6">
+                {allMet && (
+                  <Section title="Acceptance criteria">
+                    <CriteriaList criteria={artifact.review.criteria} />
+                  </Section>
+                )}
+                {optional.length > 0 && (
+                  <Section title={`Non-blocking (${optional.length})`}>
+                    {optional.map((issue, i) => (
+                      <IssueCard key={i} issue={issue} task={task} canCreateTask />
+                    ))}
+                  </Section>
+                )}
+                {artifact.review.checks.length > 0 && (
+                  <Section title="Checks">
+                    <ChecksList checks={artifact.review.checks} />
+                  </Section>
+                )}
+              </MoreDetails>
             )}
           </>
         )}
@@ -174,6 +180,48 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
         </div>
       )}
     </div>
+  );
+}
+
+function detailLabel(allMet: boolean, optional: number, checks: number): string {
+  const parts: string[] = [];
+  if (allMet) parts.push("criteria and evidence");
+  if (optional) parts.push(`${optional} non-blocking`);
+  if (checks) parts.push(`${checks} ${checks === 1 ? "check" : "checks"}`);
+  return parts.join(", ");
+}
+
+function CriteriaList({ criteria }: { criteria: ReviewArtifact["review"]["criteria"] }) {
+  return (
+    <ul className="flex flex-col gap-3 text-sm">
+      {criteria.map((c, i) => (
+        <li key={i} className="flex items-start gap-2">
+          <CriterionIcon status={c.status} />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <Prose>{c.criterion}</Prose>
+            <ClampedProse className="text-xs text-muted-foreground" maxHeight={60}>
+              {c.evidence}
+            </ClampedProse>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ChecksList({ checks }: { checks: ReviewArtifact["review"]["checks"] }) {
+  return (
+    <ul className="flex flex-col gap-2 text-sm">
+      {checks.map((v, i) => (
+        <li key={i} className="flex items-start gap-2">
+          <CheckIcon result={v.result} />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <code className="font-mono text-xs [overflow-wrap:anywhere]">{v.command}</code>
+            {v.notes && <span className="text-xs text-muted-foreground">{v.notes}</span>}
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 

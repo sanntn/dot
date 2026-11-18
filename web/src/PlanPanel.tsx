@@ -6,7 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
+import { MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
+
+// What the fold holds, so you can tell whether it is worth opening.
+function detailLabel(plan: Plan): string {
+  const parts = [`${plan.steps.length} ${plan.steps.length === 1 ? "step" : "steps"}`];
+  if (plan.filesToTouch.length) parts.push(`${plan.filesToTouch.length} ${plan.filesToTouch.length === 1 ? "file" : "files"}`);
+  if (plan.context.trim()) parts.push("context");
+  if (plan.testPlan.trim()) parts.push("test plan");
+  return parts.join(", ");
+}
 
 export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifact | null }) {
   const [editing, setEditing] = useState(false);
@@ -88,6 +98,9 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
               ))}
             </ul>
           </Section>
+          <BulletSection title="Assumptions" items={plan.assumptions} />
+          <BulletSection title="Risks" items={plan.risks} />
+          <MoreDetails label={detailLabel(plan)} className="gap-6">
           {plan.context.trim() && (
             <Section title="Context">
               <Prose className="text-sm">{plan.context}</Prose>
@@ -119,8 +132,7 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
               <Prose className="text-sm">{plan.testPlan}</Prose>
             </Section>
           )}
-          <BulletSection title="Assumptions" items={plan.assumptions} />
-          <BulletSection title="Risks" items={plan.risks} />
+          </MoreDetails>
         </div>
       </div>
 
