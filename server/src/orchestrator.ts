@@ -125,6 +125,9 @@ type Live = {
   expectOutcome: boolean;
   outcome: boolean;
   nudged: boolean;
+  // Messages sent to the process whose turn has not ended yet. Each message gets its own turn, so a
+  // message sent mid-turn must not make the earlier turn's end look like a stall.
+  turnsInFlight: number;
   costBase: number;
   // Messages that arrived while no process could take them. The next launch sends them.
   pending: ContentBlock[][];
@@ -558,6 +561,7 @@ export class Orchestrator {
         expectOutcome: false,
         outcome: false,
         nudged: false,
+        turnsInFlight: 0,
         costBase: run.costUsd,
         pending: [],
         stopped: false,
@@ -589,6 +593,7 @@ export class Orchestrator {
     }
 
     if (live.process?.acceptingInput) {
+      live.turnsInFlight++;
       live.process.send(content);
       return;
     }
@@ -691,7 +696,11 @@ export class Orchestrator {
       },
     );
     live.process = process;
-    for (const content of live.pending.splice(0)) process.send(content);
+    live.turnsInFlight = 0;
+    for (const content of live.pending.splice(0)) {
+      live.turnsInFlight++;
+      process.send(content);
+    }
     this.publish(task.id);
   }
 
@@ -792,12 +801,16 @@ export class Orchestrator {
   }
 
   private onTurnEnd(live: Live): void {
+    live.turnsInFlight = Math.max(0, live.turnsInFlight - 1);
+    // Another message is queued behind this turn. Its own turn end decides whether the stage stalled.
+    if (live.turnsInFlight > 0) return;
     if (live.stopped || !live.expectOutcome || live.outcome) return;
     const run = this.store.getRun(live.runId);
     if (this.store.getTask(live.taskId).column !== STAGE_COLUMN[run.stage]) return;
 
     if (!live.nudged) {
       live.nudged = true;
+      live.turnsInFlight++;
       live.process?.send([{ type: "text", text: STAGE_CONFIG[run.stage].nudge }]);
       return;
     }

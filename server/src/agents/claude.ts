@@ -204,7 +204,7 @@ export function claudeBinary(): string {
 // how the tests point DOT_CLAUDE_BIN at a scripted stand-in on every platform.
 export function claudeCommand(args: string[]): [string, string[]] {
   const bin = claudeBinary();
-  return /.m?js$/.test(bin) ? [process.execPath, [bin, ...args]] : [bin, args];
+  return /\.m?js$/.test(bin) ? [process.execPath, [bin, ...args]] : [bin, args];
 }
 
 export class ClaudeProcess {

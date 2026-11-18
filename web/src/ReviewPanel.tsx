@@ -40,7 +40,7 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
   const blocking = artifact?.review.issues.filter((i) => i.severity === "blocking") ?? [];
   const optional = artifact?.review.issues.filter((i) => i.severity === "non_blocking") ?? [];
   const failedChecks = artifact?.review.checks.filter((c) => c.result === "failed") ?? [];
-  const allMet = artifact !== null && artifact.review.criteria.every((c) => c.status === "met");
+  const allMet = artifact !== null && artifact.review.criteria.length > 0 && artifact.review.criteria.every((c) => c.status === "met");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

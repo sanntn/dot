@@ -254,11 +254,13 @@ export class MergeStep {
       }
       if (elapsed > giveUpMs) throw new Error("The build didn't finish within an hour.");
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, pollMs);
-        signal.addEventListener("abort", () => {
+        const done = () => {
           clearTimeout(timer);
+          signal.removeEventListener("abort", done);
           resolve();
-        });
+        };
+        const timer = setTimeout(done, pollMs);
+        signal.addEventListener("abort", done, { once: true });
       });
     }
   }
