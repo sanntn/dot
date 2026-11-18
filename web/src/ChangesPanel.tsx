@@ -1,10 +1,13 @@
 import { reportHeadline, type DiffFile, type ExecutionArtifact, type Task, type TaskDiff } from "@dot/shared";
-import { ChevronRight, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCommitHorizontal } from "lucide-react";
+import { ChevronRight, CircleAlert, CircleCheck, CircleDashed, GitBranch, GitCommitHorizontal, MessageSquarePlus, Send, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { api, errorMessage } from "./api.ts";
+import { commentKey, commentsToNotes, lineKey, parseHunks, type DiffLine, type LineComment } from "./diffComments.ts";
 import { serialLoader } from "./events.ts";
 import { ClampedProse, Headline, MoreDetails } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
@@ -16,6 +19,41 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Line comments are kept in this browser until you send them, so a reload does not lose them.
+  const storeKey = `dot.diff-comments.${task.id}`;
+  const [comments, setComments] = useState<LineComment[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storeKey) ?? "[]") as unknown;
+      return Array.isArray(saved) ? (saved as LineComment[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      if (comments.length > 0) localStorage.setItem(storeKey, JSON.stringify(comments));
+      else localStorage.removeItem(storeKey);
+    } catch {
+      // Storage can be blocked. The comments still work for this visit.
+    }
+  }, [comments, storeKey]);
+  const [sending, setSending] = useState(false);
+  // Comments can go to the executor while the change is in Review or waiting for your approval.
+  const canComment = task.column === "review" || task.column === "merge_approval";
+
+  async function sendComments() {
+    setSending(true);
+    setError(null);
+    try {
+      await api.requestChanges(task.id, commentsToNotes(comments));
+      setComments([]);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSending(false);
+    }
+  }
 
   const load = useMemo(
     () =>
@@ -113,10 +151,36 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
           </h3>
           <div className="flex min-w-0 flex-col gap-2">
             {diff.files.map((f) => (
-              <FileDiff key={f.path} file={f} />
+              <FileDiff
+                key={f.path}
+                file={f}
+                canComment={canComment && !sending}
+                comments={comments.filter((c) => c.path === f.path)}
+                onAdd={(c) => setComments((all) => [...all, { ...c, id: Math.max(0, ...all.map((a) => a.id)) + 1 }])}
+                onRemove={(id) => setComments((all) => all.filter((c) => c.id !== id))}
+              />
             ))}
           </div>
         </section>
+      )}
+
+      {comments.length > 0 && (
+        <div className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-3">
+          <span className="text-sm">
+            {comments.length} {comments.length === 1 ? "comment" : "comments"}
+          </span>
+          {canComment ? (
+            <Button size="sm" disabled={sending} onClick={() => void sendComments()}>
+              <Send aria-hidden="true" />
+              Send to the executor
+            </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">You can send them once the task is in Review or Merge approval.</span>
+          )}
+          <Button size="sm" variant="ghost" disabled={sending} onClick={() => setComments([])}>
+            Discard
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -199,13 +263,36 @@ function Bullets({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function FileDiff({ file }: { file: DiffFile }) {
+function FileDiff({
+  file,
+  canComment,
+  comments,
+  onAdd,
+  onRemove,
+}: {
+  file: DiffFile;
+  canComment: boolean;
+  comments: LineComment[];
+  onAdd: (comment: Omit<LineComment, "id">) => void;
+  onRemove: (id: number) => void;
+}) {
   // Only the hunk lines are shown. The "diff --git", "index" and "---/+++" header lines repeat the file name.
-  const lines = useMemo(() => {
-    const all = file.patch.split("\n");
-    const start = all.findIndex((l) => l.startsWith("@@"));
-    return start === -1 ? [] : all.slice(start);
-  }, [file.patch]);
+  const lines = useMemo(() => parseHunks(file.patch), [file.patch]);
+  // The line with an open comment box, by its key.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const byLine = useMemo(() => {
+    const map = new Map<string, LineComment[]>();
+    for (const c of comments) map.set(commentKey(c), [...(map.get(commentKey(c)) ?? []), c]);
+    return map;
+  }, [comments]);
+
+  function save(line: DiffLine) {
+    if (!draft.trim() || line.kind === "hunk" || line.kind === "meta") return;
+    onAdd({ path: file.path, kind: line.kind, oldNo: line.oldNo, newNo: line.newNo, code: line.text.slice(1), text: draft.trim() });
+    setDraft("");
+    setEditing(null);
+  }
 
   return (
     <details className="group min-w-0 rounded-lg border">
@@ -226,19 +313,81 @@ function FileDiff({ file }: { file: DiffFile }) {
       {!file.binary && (
         <div className="overflow-x-auto border-t">
           <pre className="min-w-fit py-1 font-mono text-xs leading-5">
-            {lines.map((line, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "px-3 whitespace-pre",
-                  line.startsWith("+") && "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200",
-                  line.startsWith("-") && "bg-red-500/10 text-red-800 dark:text-red-200",
-                  line.startsWith("@@") && "bg-muted text-muted-foreground",
-                )}
-              >
-                {line || " "}
-              </div>
-            ))}
+            {lines.map((line, i) => {
+              const key = lineKey(file.path, line);
+              const here = line.kind === "hunk" || line.kind === "meta" ? [] : (byLine.get(key) ?? []);
+              const commentable = canComment && line.kind !== "hunk" && line.kind !== "meta";
+              return (
+                <div key={i}>
+                  <div
+                    className={cn(
+                      "group/line flex whitespace-pre",
+                      line.kind === "add" && "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200",
+                      line.kind === "del" && "bg-red-500/10 text-red-800 dark:text-red-200",
+                      line.kind === "hunk" && "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    <span className="flex w-6 shrink-0 justify-center">
+                      {commentable && (
+                        <button
+                          type="button"
+                          aria-label={`Comment on line ${line.newNo ?? line.oldNo}`}
+                          className="opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100"
+                          onClick={() => {
+                            setDraft("");
+                            setEditing(editing === key ? null : key);
+                          }}
+                        >
+                          <MessageSquarePlus className="size-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </span>
+                    <span className="pr-3">{line.text || " "}</span>
+                  </div>
+                  {(here.length > 0 || editing === key) && (
+                    <div className="sticky left-0 my-1 ml-6 grid w-[32rem] max-w-[calc(100vw-5rem)] gap-1.5 font-sans whitespace-normal">
+                      {here.map((c) => (
+                        <div key={c.id} className="flex items-start gap-2 rounded-md border bg-card px-2.5 py-1.5 text-sm">
+                          <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{c.text}</span>
+                          <button
+                            type="button"
+                            aria-label="Remove comment"
+                            className="mt-0.5 text-muted-foreground hover:text-foreground"
+                            onClick={() => onRemove(c.id)}
+                          >
+                            <X className="size-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      ))}
+                      {editing === key && (
+                        <div className="grid gap-1.5">
+                          <Textarea
+                            autoFocus
+                            rows={2}
+                            value={draft}
+                            placeholder="What should change on this line?"
+                            aria-label="Comment"
+                            onChange={(e) => setDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save(line);
+                              if (e.key === "Escape") setEditing(null);
+                            }}
+                          />
+                          <div className="flex gap-2">
+                            <Button size="xs" disabled={!draft.trim()} onClick={() => save(line)}>
+                              Add comment
+                            </Button>
+                            <Button size="xs" variant="ghost" onClick={() => setEditing(null)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </pre>
           {file.truncated && (
             <p className="border-t px-3 py-2 text-xs text-muted-foreground">
