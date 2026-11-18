@@ -193,12 +193,43 @@ export class Orchestrator {
     const project = this.store.getProject(task.projectId);
 
     if (task.column === "inbox") this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
-    this.store.setNeedsInput(taskId, false);
-    const run = this.store.createRun(taskId, "research", randomUUID());
-    this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Research started." });
-    this.dispatch(run.id, buildContent(researcherBrief(task, project), this.store.taskAttachments(taskId)), true);
-    this.publish(taskId);
-    return this.store.getTask(taskId);
+    return this.beginResearch(task, project, "Research started.");
+  }
+
+  // A new researcher run with a new session.
+  private beginResearch(task: Task, project: Project, note: string): Task {
+    this.store.setNeedsInput(task.id, false);
+    const run = this.store.createRun(task.id, "research", randomUUID());
+    this.store.addMessage({ taskId: task.id, runId: run.id, role: "system", kind: "status", text: note });
+    this.dispatch(run.id, buildContent(researcherBrief(task, project), this.store.taskAttachments(task.id)), true);
+    this.publish(task.id);
+    return this.store.getTask(task.id);
+  }
+
+  // Throws away an agent's session and starts that stage again with a new one. For a stage that went
+  // wrong in a way a message cannot fix, such as an agent stuck on a wrong idea. Earlier plans, reports
+  // and reviews stay. The task's branch and worktree stay too, so a new executor continues from the commits.
+  async retryFrom(taskId: number, stage: AgentStage): Promise<Task> {
+    const task = this.store.getTask(taskId);
+    if (task.column === "inbox" || task.column === "done") throw new HttpError(409, "This task has no stage to retry");
+    if (this.mergeStep.isRunning(taskId)) throw new HttpError(409, "Stop the merge before retrying a stage");
+    if (!this.store.latestRun(taskId, stage)) throw new HttpError(409, `The ${STAGE_LABELS[stage].toLowerCase()} has not started yet`);
+    if (stage === "execute" && !this.store.latestPlan(taskId)) throw new HttpError(409, "This task has no approved plan");
+    if (stage === "review" && !this.store.latestExecutionReport(taskId)) throw new HttpError(409, "This task has no execution report to review");
+    if (stage !== "research" && (!task.worktreePath || !existsSync(task.worktreePath))) {
+      throw new HttpError(409, "The worktree was removed, so only the researcher can run again");
+    }
+    const project = this.store.getProject(task.projectId);
+
+    await this.stop(taskId);
+    this.checksFixed.delete(taskId);
+    // A retry starts a new cycle, like your own change request does.
+    if (stage !== "review") this.store.setReviewRound(taskId, 0);
+    if (task.column !== STAGE_COLUMN[stage]) this.store.moveTask(taskId, { column: STAGE_COLUMN[stage], beforeTaskId: null });
+    const note = `Retrying the ${STAGE_LABELS[stage].toLowerCase()} with a new session.`;
+    if (stage === "research") return this.beginResearch(this.store.getTask(taskId), project, note);
+    this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: note });
+    return stage === "execute" ? this.startExecution(taskId, { fresh: true }) : this.startReview(taskId, { fresh: true });
   }
 
   // Picks the researcher up again after a Stop or a stall, in its existing session.
@@ -268,15 +299,17 @@ export class Orchestrator {
 
   // Creates or reuses the task's worktree and starts (or resumes) the executor in it.
   // Also the retry and resume path after a failure or a Stop.
-  async startExecution(taskId: number): Promise<Task> {
+  // With fresh, the executor gets a new run and session instead of resuming the old one.
+  async startExecution(taskId: number, options: { fresh?: boolean } = {}): Promise<Task> {
     const task = this.store.getTask(taskId);
     if (task.column !== "execute") throw new HttpError(409, "Only a task in Execute can start the executor");
     const plan = this.store.latestPlan(taskId);
     if (!plan) throw new HttpError(409, "This task has no approved plan");
-    const existing = this.store.latestRun(taskId, "execute");
-    if (this.starting.has(taskId) || (existing && (existing.status === "running" || existing.status === "queued"))) {
+    const latest = this.store.latestRun(taskId, "execute");
+    if (this.starting.has(taskId) || (latest && (latest.status === "running" || latest.status === "queued"))) {
       throw new HttpError(409, "The executor is already running");
     }
+    const existing = options.fresh ? null : latest;
     const project = this.store.getProject(task.projectId);
 
     let workspace: Workspace;
@@ -323,9 +356,12 @@ export class Orchestrator {
       text: existing ? `Executor resumed on ${branch}.` : `Execution started on ${branch}.`,
     });
 
+    const brief = executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch);
     const prompt = run.sessionStarted
       ? "Continue implementing the approved plan. When the work is committed, call submit_execution_report."
-      : executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch);
+      : latest && options.fresh
+        ? `${brief}\n\nAnother executor already worked on this branch and its session was discarded. Read \`git log\` and \`git diff\` against the base first, keep what is right, and fix what is not.`
+        : brief;
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -342,17 +378,19 @@ export class Orchestrator {
   // across your change requests. task.reviewRound counts reviews since the last one of yours and
   // only drives the MAX_REVIEW_ROUNDS stop. Both change only when a review is submitted, so
   // starting or resuming never skips a number.
-  async startReview(taskId: number): Promise<Task> {
+  // With fresh, the reviewer gets a new run and session, and may review a report that already has a review.
+  async startReview(taskId: number, options: { fresh?: boolean } = {}): Promise<Task> {
     const task = this.store.getTask(taskId);
     if (task.column !== "review") throw new HttpError(409, "Only a task in Review can start the reviewer");
     const plan = this.store.latestPlan(taskId);
     const report = this.store.latestExecutionReport(taskId);
     if (!plan || !report) throw new HttpError(409, "This task has no execution report to review");
-    const existing = this.store.latestRun(taskId, "review");
-    if (this.starting.has(taskId) || (existing && (existing.status === "running" || existing.status === "queued"))) {
+    const latest = this.store.latestRun(taskId, "review");
+    if (this.starting.has(taskId) || (latest && (latest.status === "running" || latest.status === "queued"))) {
       throw new HttpError(409, "The reviewer is already running");
     }
-    if (!this.reviewPending(taskId)) {
+    const existing = options.fresh ? null : latest;
+    if (!options.fresh && !this.reviewPending(taskId)) {
       throw new HttpError(409, "The latest report is already reviewed. Approve it, or request changes.");
     }
     const round = (this.store.latestReview(taskId)?.version ?? 0) + 1;

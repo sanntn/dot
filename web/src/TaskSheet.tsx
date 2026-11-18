@@ -11,12 +11,13 @@ import {
   type Run,
   type Task,
 } from "@dot/shared";
-import { FileText, GitMerge, GitPullRequest, Play, Square } from "lucide-react";
+import { FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -194,7 +195,9 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                 ? "Resume reviewer"
                 : "Start reviewer"
               : null;
-  const showReviewTab = review !== null || task.column === "review" || task.column === "merge_approval";
+  const canRetry =
+    !busy && stagesWithRuns.length > 0 && task.column !== "inbox" && task.column !== "done" && !(task.column === "merge" && working);
+  const showReviewTab =review !== null || task.column === "review" || task.column === "merge_approval";
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -256,6 +259,32 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                 <FileText aria-hidden="true" />
                 Review plan
               </Button>
+            )}
+            {canRetry && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="outline" disabled={busy}>
+                    <RotateCcw aria-hidden="true" />
+                    Retry from
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="grid w-72 gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Starts that agent again with a new session. Plans, reports and reviews stay, and so do the branch and its commits.
+                  </p>
+                  {stagesWithRuns.map((s) => (
+                    <Button
+                      key={s}
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void act(() => api.retryStage(task.id, s))}
+                    >
+                      {STAGE_LABELS[s]}
+                    </Button>
+                  ))}
+                </PopoverContent>
+              </Popover>
             )}
             {working && (
               <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.stopTask(task.id))}>

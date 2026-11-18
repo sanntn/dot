@@ -173,6 +173,34 @@ test("a task goes from the inbox to merge approval through three agents", async 
   assert.ok(Math.abs(h.store.getTask(h.task.id).costUsd - total) < 1e-9);
 });
 
+test("retrying the executor starts a new session on the same branch, and the reviewer runs again", async () => {
+  const again = { commit: { file: "hello.txt", content: "hello again\n", message: "Reword hello.txt" } };
+  const h = await harness([
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
+    { turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[{ tool: "submit_review", args: review("approve") }]] },
+    { turns: [[again, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("merge approval", h.inColumn("merge_approval"));
+  const branch = h.store.getTask(h.task.id).branch;
+
+  await h.orchestrator.retryFrom(h.task.id, "execute");
+  await h.until("a second review", (t) => (h.store.latestReview(t.id)?.version ?? 0) === 2 && h.inColumn("merge_approval")(t));
+
+  const prompts = h.calls().filter((c) => "prompt" in c);
+  const retried = prompts[3]!;
+  assert.equal(retried.resume, false);
+  assert.match(String(retried.prompt), /session was discarded/);
+  assert.equal(h.store.getTask(h.task.id).branch, branch);
+  assert.equal(h.orchestrator.runsFor(h.task.id).filter((r) => r.stage === "execute").length, 2);
+  assert.equal(h.store.latestReview(h.task.id)?.version, 2);
+});
+
 test("ask_human flags the task, and the answer resumes the session", async () => {
   const h = await harness([
     { turns: [[{ tool: "ask_human", args: { question: "Which greeting?", choices: ["hello", "hi"] } }]] },

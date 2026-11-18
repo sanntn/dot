@@ -509,6 +509,8 @@ export type MergeRequest = z.input<typeof MergeSchema>;
 export const SendBackSchema =z.object({ notes: z.string().trim().min(1, "Say what to change").max(20_000) });
 export type SendBack = z.infer<typeof SendBackSchema>;
 
+export const RetrySchema = z.object({ stage: AgentStageSchema });
+
 // Server-sent events. Clients refetch on these.
 export type BoardEvent =
   | { type: "projects.changed" }

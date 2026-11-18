@@ -1,4 +1,5 @@
 import type {
+  AgentStage,
   AttachmentRef,
   ChatMessage,
   ClaudeAccount,
@@ -86,6 +87,7 @@ export const api = {
   deleteTask: (id: number) => request<void>(`/tasks/${id}`, "DELETE"),
 
   startTask: (id: number) => request<Task>(`/tasks/${id}/start`, "POST"),
+  retryStage: (id: number, stage: AgentStage) => request<Task>(`/tasks/${id}/retry`, "POST", { stage }),
   stopTask: (id: number) => request<void>(`/tasks/${id}/stop`, "POST"),
   listEvents: (id: number) => request<TaskEvent[]>(`/tasks/${id}/events`),
   listRuns: (id: number) => request<Run[]>(`/tasks/${id}/runs`),

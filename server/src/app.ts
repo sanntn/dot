@@ -17,6 +17,7 @@ import {
   REPO_HOST_LABELS,
   ProjectInputSchema,
   ProjectPatchSchema,
+  RetrySchema,
   SendBackSchema,
   SendMessageSchema,
   TaskBatchSchema,
@@ -430,6 +431,12 @@ export function createApp(
     if (task.column === "execute") return c.json(await orchestrator.startExecution(task.id));
     if (task.column === "review") return c.json(await orchestrator.startReview(task.id));
     throw new HttpError(409, "There is no agent to start for this column");
+  });
+
+  // Throws away one agent's session and starts that stage again.
+  app.post("/tasks/:id/retry", async (c) => {
+    const { stage } = await parseBody(c, RetrySchema);
+    return c.json(await orchestrator.retryFrom(idParam(c), stage));
   });
 
   app.get("/tasks/:id/review", (c) => {
