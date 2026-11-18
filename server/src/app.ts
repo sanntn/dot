@@ -13,6 +13,7 @@ import {
   type ProjectOverview,
   MAX_IMAGE_BYTES,
   MergeSchema,
+  PlanSplitSchema,
   PlanUpdateSchema,
   REPO_HOST_LABELS,
   ProjectInputSchema,
@@ -516,6 +517,11 @@ export function createApp(
   app.put("/tasks/:id/plan", async (c) => {
     const { plan } = await parseBody(c, PlanUpdateSchema);
     return c.json(orchestrator.savePlan(idParam(c), plan));
+  });
+
+  app.post("/tasks/:id/plan/split", async (c) => {
+    const input = await parseBody(c, PlanSplitSchema);
+    return c.json(orchestrator.splitPlan(idParam(c), input), 201);
   });
 
   app.post("/tasks/:id/plan/approve", async (c) => c.json(await orchestrator.approvePlan(idParam(c))));

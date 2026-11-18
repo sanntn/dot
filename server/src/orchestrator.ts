@@ -8,6 +8,8 @@ import {
   type ChatMessage,
   type Column,
   type Plan,
+  type PlanArtifact,
+  type PlanSplit,
   type Project,
   type Run,
   type Task,
@@ -566,6 +568,55 @@ ${checksSummary(results)}` });
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
+  }
+
+  // Moves some steps of a big plan into a new task. The new task waits for this one and starts its research
+  // by itself afterwards. This task's plan loses those steps, so the executor stays on what is left.
+  splitPlan(taskId: number, input: PlanSplit): { task: Task; plan: PlanArtifact } {
+    const task = this.store.getTask(taskId);
+    if (task.column !== "research" && task.column !== "plan_review") {
+      throw new HttpError(409, "The plan can only be split before it is approved");
+    }
+    const latest = this.store.latestPlan(taskId);
+    if (!latest) throw new HttpError(409, "This task has no plan yet");
+    const picked = [...new Set(input.steps)].sort((a, b) => a - b);
+    const { plan } = latest;
+    if (picked.some((i) => i >= plan.steps.length)) throw new HttpError(400, "A picked step does not exist");
+    if (picked.length >= plan.steps.length) throw new HttpError(400, "Leave at least one step in this task");
+
+    const moved = picked.map((i) => plan.steps[i]!);
+    const kept = plan.steps.filter((_, i) => !picked.includes(i));
+    const description = [
+      `Split from #${task.number}, ${task.title}. That task finishes first, and this one builds on its branch's merge.`,
+      `Goal of #${task.number}: ${plan.goal}`,
+      `Steps for this task:\n${moved.map((s, i) => `${i + 1}. ${s}`).join("\n")}`,
+      plan.context.trim() ? `Context found while planning #${task.number}:\n${plan.context.trim()}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const created = this.store.createTask({
+      projectId: task.projectId,
+      title: input.title,
+      description,
+      blockedBy: [taskId],
+      autoStart: true,
+    });
+    const saved = this.store.addPlan(taskId, null, "user", {
+      ...plan,
+      steps: kept,
+      assumptions: [...plan.assumptions, `${moved.length === 1 ? "One step is" : `${moved.length} steps are`} left to #${created.number}, ${created.title}.`],
+    });
+    this.store.addMessage({
+      taskId,
+      runId: null,
+      role: "system",
+      kind: "status",
+      text: `Split ${moved.length === 1 ? "one step" : `${moved.length} steps`} into #${created.number}, ${created.title}. It starts after this task is done. You edited the plan (v${saved.version}).`,
+    });
+    this.publish(taskId);
+    this.bus.publish({ type: "tasks.changed", projectId: task.projectId, taskId: created.id });
+    return { task: created, plan: saved };
   }
 
   savePlan(taskId: number, plan: Plan) {

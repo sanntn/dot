@@ -1,8 +1,9 @@
 import { planHeadline, type Plan, type PlanArtifact, type Task } from "@dot/shared";
-import { Check, CornerUpLeft, Pencil } from "lucide-react";
+import { Check, CornerUpLeft, Pencil, Split } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
@@ -20,6 +21,7 @@ function detailLabel(plan: Plan): string {
 
 export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifact | null }) {
   const [editing, setEditing] = useState(false);
+  const [splitting, setSplitting] = useState(false);
   const [sendingBack, setSendingBack] = useState(false);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -53,6 +55,21 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
     );
   }
 
+  if (splitting) {
+    return (
+      <PlanSplitter
+        plan={artifact.plan}
+        taskTitle={task.title}
+        busy={busy}
+        error={error}
+        onCancel={() => setSplitting(false)}
+        onSplit={async (title, steps) => {
+          if (await run(() => api.splitPlan(task.id, title, steps))) setSplitting(false);
+        }}
+      />
+    );
+  }
+
   if (editing) {
     return (
       <PlanEditor
@@ -76,6 +93,12 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
             Version {artifact.version}, by {artifact.author === "agent" ? "the researcher" : "you"},{" "}
             {new Date(artifact.createdAt).toLocaleString()}
           </p>
+          {editable && plan.steps.length > 1 && (
+            <Button type="button" variant="outline" size="sm" onClick={() => setSplitting(true)}>
+              <Split aria-hidden="true" />
+              Split
+            </Button>
+          )}
           {editable && (
             <Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
               <Pencil aria-hidden="true" />
@@ -189,6 +212,74 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
         </div>
       )}
     </div>
+  );
+}
+
+// Pick the steps that belong in a separate task. That task waits for this one and starts after it is done.
+function PlanSplitter(props: {
+  plan: Plan;
+  taskTitle: string;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onSplit: (title: string, steps: number[]) => void;
+}) {
+  const id = useId();
+  const [picked, setPicked] = useState<number[]>([]);
+  const [title, setTitle] = useState(`${props.taskTitle}, part 2`);
+  const tooMany = picked.length >= props.plan.steps.length;
+
+  return (
+    <form
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={(e) => {
+        e.preventDefault();
+        props.onSplit(title, picked);
+      }}
+    >
+      <div className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-4 py-4">
+        <p className="text-sm text-muted-foreground">
+          Tick the steps to move into a new task. The new task waits for this one and starts its research when this one is done. This
+          task keeps the rest, saved as a new plan version.
+        </p>
+        <ul className="grid gap-1.5">
+          {props.plan.steps.map((step, i) => (
+            <li key={i}>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-primary"
+                  checked={picked.includes(i)}
+                  onChange={(e) => setPicked(e.target.checked ? [...picked, i] : picked.filter((x) => x !== i))}
+                />
+                <span className="tabular-nums text-muted-foreground">{i + 1}.</span>
+                <span className="[overflow-wrap:anywhere]">{step}</span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <div className="grid gap-2">
+          <Label htmlFor={`${id}-title`}>Title of the new task</Label>
+          <Input id={`${id}-title`} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} required />
+        </div>
+        {tooMany && <p className="text-xs text-destructive">Leave at least one step in this task.</p>}
+      </div>
+      <div className="grid gap-2 border-t bg-background p-3">
+        {props.error && (
+          <Alert variant="destructive">
+            <AlertDescription className="whitespace-pre-wrap">{props.error}</AlertDescription>
+          </Alert>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={props.onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={props.busy || picked.length === 0 || tooMany || !title.trim()}>
+            Move {picked.length || ""} {picked.length === 1 ? "step" : "steps"} to a new task
+          </Button>
+        </div>
+      </div>
+    </form>
   );
 }
 

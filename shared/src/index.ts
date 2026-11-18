@@ -513,7 +513,14 @@ export type MergeRequest = z.input<typeof MergeSchema>;
 export const SendBackSchema =z.object({ notes: z.string().trim().min(1, "Say what to change").max(20_000) });
 export type SendBack = z.infer<typeof SendBackSchema>;
 
-export const RetrySchema = z.object({ stage: AgentStageSchema });
+// Moves some of a plan's steps into a new task that waits for this one. Steps are positions, from 0.
+export const PlanSplitSchema = z.object({
+  title: z.string().trim().min(1, "Title is required").max(200),
+  steps: z.array(z.number().int().min(0)).min(1, "Pick at least one step").max(200),
+});
+export type PlanSplit = z.infer<typeof PlanSplitSchema>;
+
+export const RetrySchema =z.object({ stage: AgentStageSchema });
 
 // Server-sent events. Clients refetch on these.
 export type BoardEvent =

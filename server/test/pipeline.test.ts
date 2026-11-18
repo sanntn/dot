@@ -233,6 +233,25 @@ test("a blocked task that asked to start by itself starts research once its bloc
   }
 });
 
+test("splitting a plan moves steps into a linked task that starts after this one", async () => {
+  const big = { ...plan, steps: ["Create hello.txt", "Add a farewell", "Document both"] };
+  const h = await harness([{ turns: [[{ tool: "submit_plan", args: big }]] }]);
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+
+  assert.throws(() => h.orchestrator.splitPlan(h.task.id, { title: "All", steps: [0, 1, 2] }), /at least one step/);
+  assert.throws(() => h.orchestrator.splitPlan(h.task.id, { title: "Bad", steps: [7] }), /does not exist/);
+
+  const { task: child, plan: saved } = h.orchestrator.splitPlan(h.task.id, { title: "Docs and farewell", steps: [1, 2] });
+  assert.deepEqual(saved.plan.steps, ["Create hello.txt"]);
+  assert.equal(saved.version, 2);
+  assert.match(saved.plan.assumptions.at(-1) ?? "", /2 steps are left to #\d+/);
+  assert.deepEqual(child.blockedBy.map((b) => b.id), [h.task.id]);
+  assert.equal(child.autoStart, true);
+  assert.match(child.description, /1\. Add a farewell\n2\. Document both/);
+  assert.equal(child.column, "inbox");
+});
+
 test("ask_human flags the task, and the answer resumes the session", async () => {
   const h = await harness([
     { turns: [[{ tool: "ask_human", args: { question: "Which greeting?", choices: ["hello", "hi"] } }]] },

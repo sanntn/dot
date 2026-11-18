@@ -104,6 +104,8 @@ export const api = {
     request<Task>(`/tasks/${id}/review/request-changes`, "POST", { notes }),
   getDiff: (id: number) => request<TaskDiff | null>(`/tasks/${id}/diff`),
   savePlan: (id: number, plan: Plan) => request<PlanArtifact>(`/tasks/${id}/plan`, "PUT", { plan }),
+  splitPlan: (id: number, title: string, steps: number[]) =>
+    request<{ task: Task; plan: PlanArtifact }>(`/tasks/${id}/plan/split`, "POST", { title, steps }),
   approvePlan: (id: number) => request<Task>(`/tasks/${id}/plan/approve`, "POST"),
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
 
