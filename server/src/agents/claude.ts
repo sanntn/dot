@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { asAgent, handOver } from "../isolation.ts";
 
 // Runs one `claude -p` process in stream-json mode. The process stays alive between turns,
 // so chat messages can go straight into a running session. Dot ends stdin once a turn finishes
@@ -86,9 +87,10 @@ function cleanEnv(configDir: string | null, tokenName: string | null = null): No
 // Asks the CLI which account a config folder is logged into.
 export function claudeAccount(configDir: string | null, tokenName: string | null = null): Promise<ClaudeAccount> {
   return new Promise((resolve, reject) => {
+    const [command, args] = asAgent(claudeBinary(), ["auth", "status", "--json"]);
     execFile(
-      claudeBinary(),
-      ["auth", "status", "--json"],
+      command,
+      args,
       { env: cleanEnv(configDir, tokenName), windowsHide: true, timeout: 30_000 },
       (err, stdout) => {
         // auth status exits nonzero when logged out, but still prints the JSON.
@@ -131,13 +133,15 @@ export function startClaudeLogin(configDir: string): Promise<string> {
   existing?.child.kill();
 
   const tmp = mkdtempSync(join(tmpdir(), "dot-login-"));
+  handOver(tmp);
   const urlFile = join(tmp, "url.txt");
   const windows = process.platform === "win32";
   const script = join(tmp, windows ? "open.cmd" : "open.sh");
   writeFileSync(script, windows ? `@echo %1> "${urlFile}"\r\n` : `#!/bin/sh\nprintf '%s' "$1" > "${urlFile}"\n`);
   if (!windows) chmodSync(script, 0o755);
 
-  const child = spawn(claudeBinary(), ["auth", "login"], {
+  const [loginCommand, loginArgs] = asAgent(claudeBinary(), ["auth", "login"]);
+  const child = spawn(loginCommand, loginArgs, {
     env: { ...cleanEnv(configDir), BROWSER: script },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -238,7 +242,8 @@ export class ClaudeProcess {
       ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
     ];
 
-    this.child = spawn(claudeBinary(), args, {
+    const [command, wrapped] = asAgent(claudeBinary(), args);
+    this.child = spawn(command, wrapped, {
       cwd: options.cwd,
       env: cleanEnv(options.configDir, options.tokenName),
       stdio: ["pipe", "pipe", "pipe"],

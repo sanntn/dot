@@ -34,7 +34,11 @@ ENV NODE_ENV=production \
     DOT_DATA_DIR=/data/dot \
     DOT_HOST=0.0.0.0 \
     DOT_PORT=4317 \
-    DOT_GIT_USE_TOKEN=true
+    DOT_GIT_USE_TOKEN=true \
+    DOT_AGENT_UID=1000 \
+    DOT_AGENT_GID=1000
+# The server runs as root and starts every agent as uid 1000 (the node user), with no capabilities.
+# Needs util-linux's setpriv, which this base image has. See server/src/isolation.ts.
 VOLUME /data
 EXPOSE 4317
 

@@ -45,7 +45,7 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 
 Pressing Merge in Merge approval runs the merge step. It checks that the branch still merges cleanly, pushes it to `origin` with your own git credentials, and opens a pull request on Bitbucket or GitHub (or reuses the open one). It then waits for the build, squash merges, moves the task to Done, and removes the worktree and local branch. Conflicts and failed builds send the task back to the executor and through review again.
 
-Dot reads the host, owner and repo from the repository's `origin` remote. The project settings show what it found. Fill in the host, owner or repo there only to override origin, for example when origin uses an SSH alias Dot can't recognize. A host name that contains "github" or "bitbucket" counts, so aliases like `github-work` work. The tokens stay in Dot's server process. Agents and git never see them.
+Dot reads the host, owner and repo from the repository's `origin` remote. The project settings show what it found. Fill in the host, owner or repo there only to override origin, for example when origin uses an SSH alias Dot can't recognize. A host name that contains "github" or "bitbucket" counts, so aliases like `github-work` work. The tokens stay in Dot's server process. In the Docker image, agents run as a different user and cannot read them (see Agent isolation below). When you run Dot locally, agents run as you, so they can read your `.env` file.
 
 ### GitHub
 
@@ -82,7 +82,8 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 | `DOT_BITBUCKET_TOKEN`, `DOT_BITBUCKET_EMAIL` | for Bitbucket projects | As under Bitbucket above. Cloning and pushing also need read and write access to repository contents. An Atlassian API token needs the `read:repository:bitbucket` and `write:repository:bitbucket` scopes. |
 | `DOT_CLAUDE_TOKEN` | yes | Run `claude setup-token` on your own machine and paste the result. Agents run on your subscription with it. This is the default account. |
 | `DOT_CLAUDE_TOKEN_<NAME>` | no | One more account. Run `claude setup-token` while signed in to that account and add it as, say, `DOT_CLAUDE_TOKEN_WORK`. Names are upper case letters, digits and underscores. |
-| `DOT_SESSION_SECRET` | no | Signs the login cookie. Defaults to a value derived from the password. |
+| `DOT_SESSION_SECRET` | no | Signs the login cookie. Without it Dot generates a random secret once and keeps it in `session.json` in the data folder. Sign out revokes every cookie issued before it. |
+| `DOT_TRUST_PROXY` | no | Set to `true` behind Coolify's proxy, so a run of wrong passwords locks out only that client's address. Without it, all clients share one counter. Leave it off when Dot is reachable without a proxy, because the header can then be forged. |
 | `DOT_GIT_NAME`, `DOT_GIT_EMAIL` | no | The identity on the executor's commits. Defaults to `Dot` and `dot@localhost`. |
 | `DOT_MAX_AGENTS` and the others above | no | Work the same as locally. |
 
@@ -90,10 +91,19 @@ The `Dockerfile` builds one image that runs the API and serves the board. It ins
 
 Notes:
 
-- Agents run shell commands inside the container as the `node` user, not on your server. Agents never get Dot's variables in their environment, but they run as the same user as the server, so one could still read the server's environment through `/proc`. Use a fine-grained GitHub token limited to the repos Dot works on.
+- Agents run shell commands inside the container as the `node` user, not on your server. The Dot server runs as root and cannot be read by that user, so an agent cannot get Dot's tokens or password. Use a fine-grained GitHub token limited to the repos Dot works on anyway. Agents do hold their own Claude token, since they need it to run.
+- The container needs the default Docker capabilities (SETUID, SETGID and SETPCAP). If Dot stops at start-up with "Agent isolation check failed", the platform removed one. Set `DOT_AGENT_ISOLATION=off` to run everything as `node` as before, with the weaker protection described below.
 - To run a project on another account, open its settings and pick the token under Claude account. The list shows the names Dot found and never the values. A session keeps the token it started with, so changing a project's token affects new sessions only. Add or remove a token variable, then redeploy.
 - A project's Claude config folder still works, but the in-app Sign in button does not, because the sign-in callback goes to localhost. In the Coolify terminal, run `gosu node env CLAUDE_CONFIG_DIR=/data/home/.claude-work claude auth login` and set the same folder in the project.
 - Local use is unchanged. Without `DOT_HOST` and `DOT_PASSWORD`, Dot binds to loopback with no login.
+
+## Agent isolation
+
+Agents run shell commands, so whatever their OS user can read, a prompt-injected agent can read and send out. What Dot does about that depends on where it runs.
+
+**Docker image.** The server runs as root. Every agent, and every git command that reads agent-written files, runs as the `node` user with no capabilities (`setpriv`, no new privileges). The database, session secret, attachments and the server's environment belong to root. Tokens never go to a git process an agent could influence: Dot fetches from GitHub or Bitbucket into its own repository under `data/transport`, agents copy from there, and a push goes through a bundle file that Dot fetches into that repository first. Dot pushes to the address built from the project's host, owner and repo settings, never to the origin set in the repository's own config, which an agent can edit. At start-up Dot tries to read its own files as the agent user and refuses to start if it can. What is left: agents share one user, so one agent could read another's run token from `/proc/<pid>/cmdline`. `docker/smoke-test.ts` checks the clone, fetch and push path inside a running container (the file's header says how to run it).
+
+**Locally.** Agents run as you. Nothing stops an agent from reading `.env` or calling Dot's API on `127.0.0.1`, so anything it is told to do by text in a repository or web page runs with your rights. Dot adds deny rules for its own API port, its private files, `/proc` environment dumps and git commands that leave the task branch. They block the direct route and a script gets past them. Use a fine-grained GitHub token, and run Dot in the Docker image or a VM if you point it at repositories you don't trust.
 
 ## Layout
 

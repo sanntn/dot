@@ -136,6 +136,23 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
     }
   }
 
+  // Files whose changes the Changes tab can't show in full (cut off, or binary). Approving the merge
+  // asks for a second click while any exist, so a padded diff can't slip a change past you.
+  const [unseenFiles, setUnseenFiles] = useState<string[] | null>(null);
+
+  async function approveMerge(confirmed = false) {
+    if (!confirmed) {
+      const diff = await api.getDiff(task.id);
+      const unseen = diff?.files.filter((f) => f.truncated || f.binary).map((f) => f.path) ?? [];
+      if (unseen.length > 0) {
+        setUnseenFiles(unseen);
+        return;
+      }
+    }
+    setUnseenFiles(null);
+    await api.merge(task.id);
+  }
+
   const working = task.agentState === "running" || task.agentState === "queued";
   const cost = runs.reduce((sum, r) => sum + r.costUsd, 0);
 
@@ -215,7 +232,7 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
               </Button>
             )}
             {task.column === "merge_approval" && !working && (
-              <Button size="sm" disabled={busy} onClick={() => void act(() => api.merge(task.id))}>
+              <Button size="sm" disabled={busy} onClick={() => void act(() => approveMerge())}>
                 <GitMerge aria-hidden="true" />
                 Merge
               </Button>
@@ -247,6 +264,30 @@ export function TaskSheet({ task, onClose }: { task: Task; onClose: () => void }
           {error && (
             <Alert variant="destructive">
               <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+            </Alert>
+          )}
+          {unseenFiles && task.column === "merge_approval" && (
+            <Alert>
+              <AlertDescription className="grid gap-2">
+                <span>
+                  {unseenFiles.length === 1 ? "One file's changes" : `${unseenFiles.length} files' changes`} can't be shown in
+                  full in the Changes tab. Check {unseenFiles.length === 1 ? "it" : "them"} in your editor before merging:
+                </span>
+                <ul className="list-disc pl-5 font-mono text-xs [overflow-wrap:anywhere]">
+                  {unseenFiles.slice(0, 10).map((path) => (
+                    <li key={path}>{path}</li>
+                  ))}
+                  {unseenFiles.length > 10 && <li>and {unseenFiles.length - 10} more</li>}
+                </ul>
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={busy} onClick={() => void act(() => approveMerge(true))}>
+                    Merge anyway
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setUnseenFiles(null)}>
+                    Cancel
+                  </Button>
+                </div>
+              </AlertDescription>
             </Alert>
           )}
         </SheetHeader>

@@ -7,6 +7,9 @@ import { createApp } from "./app.ts";
 import { Auth } from "./auth.ts";
 import { openDb } from "./db.ts";
 import { EventBus } from "./events.ts";
+import { guardRules } from "./agents/guards.ts";
+import { configureTransport } from "./git.ts";
+import { agentDir, isolated, verifyIsolation } from "./isolation.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { Store } from "./store.ts";
 
@@ -20,7 +23,11 @@ try {
 const port = Number(process.env.DOT_PORT ?? 4317);
 const dataDir = resolve(process.env.DOT_DATA_DIR ?? resolve(root, "data"));
 const host = process.env.DOT_HOST?.trim() || "127.0.0.1";
-const auth = new Auth(process.env.DOT_PASSWORD || null, process.env.DOT_SESSION_SECRET || null);
+const auth = new Auth(
+  process.env.DOT_PASSWORD || null,
+  process.env.DOT_SESSION_SECRET || null,
+  resolve(dataDir, "session.json"),
+);
 const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
 if (!isLoopback && !auth.enabled) {
   // Dot runs agents with shell access. Never serve it to a network without a login.
@@ -29,14 +36,34 @@ if (!isLoopback && !auth.enabled) {
 }
 const dbFile = process.env.DOT_DB ?? resolve(dataDir, "dot.db");
 
+// In the Docker image the server runs as root and the agents as an unprivileged user (see isolation.ts).
+// Everything the server creates stays private to it. The folders agents work in are handed over below.
+if (isolated) process.umask(0o077);
+const worktreesDir = resolve(dataDir, "worktrees");
+const reposDir = resolve(dataDir, "repos");
+if (isolated) {
+  agentDir(worktreesDir);
+  agentDir(reposDir);
+  configureTransport(resolve(dataDir, "transport"));
+}
+
 const store = new Store(openDb(dbFile));
+// After the database exists, so the check can try to read it as the agent user. Refuses to start
+// when an agent could reach something private, rather than running agents quietly with too much access.
+try {
+  verifyIsolation([dbFile, `${dbFile}-wal`, `${dbFile}-shm`, resolve(dataDir, "session.json"), resolve(dataDir, "attachments")]);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+}
 const bus = new EventBus();
 const orchestrator = new Orchestrator(store, bus, {
   port,
   maxAgents: Math.max(1, Number(process.env.DOT_MAX_AGENTS ?? 2)),
   model: process.env.DOT_MODEL ?? "opus",
   // Outside any repo, so worktrees never show up as untracked files in your checkout.
-  worktreesDir: resolve(dataDir, "worktrees"),
+  worktreesDir,
+  guardRules: guardRules({ port, root, dataDir, dbFile }),
 });
 orchestrator.recover();
 
@@ -48,7 +75,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 
 const api = createApp(store, bus, orchestrator, {
   attachmentsDir: resolve(dataDir, "attachments"),
-  reposDir: resolve(dataDir, "repos"),
+  reposDir,
   auth,
   allowedHosts: (process.env.DOT_ALLOWED_HOSTS ?? "")
     .split(",")

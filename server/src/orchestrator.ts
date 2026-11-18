@@ -42,9 +42,8 @@ import {
 import { HttpError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
 import type { BuildStatus } from "./bitbucket.ts";
-import { repoHostFor, type RepoHostClient } from "./githost.ts";
+import { repoHostFor, trustedOrigin, type RepoHostClient } from "./githost.ts";
 import {
-  branchHead,
   branchSlug,
   commitsAhead,
   deleteBranch,
@@ -70,6 +69,8 @@ export type OrchestratorConfig = {
   maxAgents: number;
   model: string;
   worktreesDir: string;
+  // Deny rules every agent gets, see agents/guards.ts.
+  guardRules: string[];
 };
 
 // The column a stage's agent works in. Outside it, the agent is only chatting.
@@ -263,7 +264,7 @@ export class Orchestrator {
     this.starting.add(taskId);
     try {
       // Start from origin's base, not a local branch that may be behind.
-      const fetched = await fetchBase(project.repoPath, project.baseBranch);
+      const fetched = await fetchBase(project.repoPath, project.baseBranch, trustedOrigin(project));
       workspace = await prepareWorktree({
         repo: project.repoPath,
         base: project.baseBranch,
@@ -455,7 +456,7 @@ export class Orchestrator {
       }
 
       // 1. Would the branch still merge cleanly into origin's current base?
-      const fetched = await fetchBase(repo, base);
+      const fetched = await fetchBase(repo, base, trustedOrigin(project));
       if (fetched.note) say(fetched.note);
       const conflicts = await mergeConflicts(repo, fetched.ref, branch);
       stillMerging();
@@ -480,8 +481,8 @@ export class Orchestrator {
         say(originNote);
       }
       say(`Pushing ${branch} to origin.`);
-      await pushBranch(repo, branch);
-      const head = await branchHead(repo, branch);
+      // The commit that was pushed, so the build wait and the merge refer to exactly that commit.
+      const head = await pushBranch(repo, branch, { origin: trustedOrigin(project), base });
       stillMerging();
 
       // 3. Reuse the task's pull request while it is open, otherwise find or open one.
@@ -1133,7 +1134,7 @@ export class Orchestrator {
         appendSystemPrompt: stage.systemPrompt,
         tools: stage.tools,
         allowedTools: stage.allowedTools,
-        deniedTools: stage.deniedTools,
+        deniedTools: [...stage.deniedTools, ...this.config.guardRules],
         mcpUrl: `http://127.0.0.1:${this.config.port}/api/mcp/${live.token}`,
         configDir,
         tokenName,

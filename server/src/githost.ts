@@ -30,6 +30,16 @@ export function parseRemoteUrl(url: string): Omit<RemoteInfo, "url"> {
   };
 }
 
+// Where Dot fetches from and pushes to in an isolated Dot, built only from the project's own fields.
+// The repository's origin config is not used, since an agent can edit it. Null when the project
+// does not name a GitHub or Bitbucket repository.
+export function trustedOrigin(project: Project): string | null {
+  const { repoHost, repoOwner, repoName } = project;
+  const plain = /^[\w.-]+$/;
+  if (!repoHost || !repoOwner || !repoName || !plain.test(repoOwner) || !plain.test(repoName)) return null;
+  return `https://${repoHost === "bitbucket" ? "bitbucket.org" : "github.com"}/${repoOwner}/${repoName}.git`;
+}
+
 export async function detectRemote(repoPath: string): Promise<RemoteInfo> {
   const url = await remoteUrl(repoPath);
   if (!url) return { url: null, host: null, owner: null, name: null };

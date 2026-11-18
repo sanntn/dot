@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Commit, DiffFile, TaskDiff } from "@dot/shared";
+import { agentDir, asAgent, handOver, isolated } from "./isolation.ts";
 
 const run = promisify(execFile);
 
@@ -23,12 +25,26 @@ mkdirSync(NO_HOOKS, { recursive: true });
 // A deployed Dot (DOT_GIT_USE_TOKEN=true) has no git login of its own, so network calls to github.com
 // and bitbucket.org authenticate with DOT_GITHUB_TOKEN and DOT_BITBUCKET_TOKEN. Each token goes to that one
 // git process through a credential helper, and never into a config file or an agent's environment.
+//
+// In an isolated Dot (see isolation.ts) git runs as the agent user, so a config entry, attributes file
+// or filter an agent plants in a repository can only run as the agent. The server runs git itself
+// (`trusted`) only where nothing an agent controls is read: a fresh clone, and the transport
+// repositories below. Those calls ignore the global and system config.
 export async function git(
   cwd: string,
   args: string[],
-  options: { network?: boolean; timeoutMs?: number } = {},
+  options: { network?: boolean; timeoutMs?: number; trusted?: boolean } = {},
 ): Promise<string> {
+  const trusted = options.trusted === true;
+  if (isolated && options.network && !trusted) {
+    throw new Error("A git call that carries a token must run as the server, in a repository the agents cannot write.");
+  }
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DOT_")));
+  if (isolated && trusted) {
+    env.HOME = process.env.DOT_ROOT_HOME?.trim() || "/root";
+    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    env.GIT_CONFIG_NOSYSTEM = "1";
+  }
   if (options.network) {
     env.GIT_TERMINAL_PROMPT = "0";
     if (process.env.DOT_GIT_USE_TOKEN === "true") {
@@ -50,9 +66,11 @@ export async function git(
       });
     }
   }
+  const gitArgs = ["-c", "core.quotePath=false", "-c", `core.hooksPath=${NO_HOOKS}`, "-c", "core.fsmonitor=false", ...args];
+  const [command, commandArgs] = trusted ? ["git", gitArgs] : asAgent("git", gitArgs);
   const { stdout } = await run(
-    "git",
-    ["-c", "core.quotePath=false", "-c", `core.hooksPath=${NO_HOOKS}`, "-c", "core.fsmonitor=false", ...args],
+    command,
+    commandArgs,
     {
       cwd,
       env,
@@ -127,11 +145,53 @@ export async function resolveBaseRef(repo: string, base: string): Promise<string
   return (await gitOk(repo, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])) ? ref : base;
 }
 
+// Transport repositories. In an isolated Dot the tokens never go near a repository the agents can
+// write: the server fetches from the host into its own bare repository per project, and agents
+// copy from there. Pushing goes the other way, through a bundle file. The agent writes the bundle,
+// and the server fetches it into the transport repository, which only the server can change.
+let transportDir = resolve(tmpdir(), "dot-transport");
+
+export function configureTransport(dir: string): void {
+  transportDir = resolve(dir);
+  if (!isolated) return;
+  mkdirSync(transportDir, { recursive: true });
+  // Agents may enter this folder (to read the base branch and write bundles), but not list or change it.
+  chmodSync(transportDir, 0o711);
+  agentDir(join(transportDir, "bundles"));
+}
+
+const repoKey = (repo: string) => createHash("sha256").update(resolve(repo)).digest("hex").slice(0, 16);
+
+async function transportRepo(repo: string): Promise<string> {
+  const path = join(transportDir, `${repoKey(repo)}.git`);
+  if (!existsSync(join(path, "HEAD"))) {
+    await git(transportDir, ["init", "--bare", "--quiet", path], { trusted: true });
+  }
+  return path;
+}
+
+const serverGit = (args: string[], options: { network?: boolean; timeoutMs?: number } = {}) =>
+  git(transportDir, args, { ...options, trusted: true });
+
 // Fetches the base from origin. Returns the ref to use, plus a note when the fetch failed.
-export async function fetchBase(repo: string, base: string): Promise<{ ref: string; note: string | null }> {
-  if (!(await remoteUrl(repo))) return { ref: await resolveBaseRef(repo, base), note: null };
+// `origin` is the repository's URL as the project settings give it. An isolated Dot uses it instead of
+// the repository's own config, which an agent can edit.
+export async function fetchBase(repo: string, base: string, origin: string | null = null): Promise<{ ref: string; note: string | null }> {
+  if (isolated ? !origin : !(await remoteUrl(repo))) return { ref: await resolveBaseRef(repo, base), note: null };
   try {
-    await git(repo, ["fetch", "--no-tags", "origin", `+refs/heads/${base}:${dotBaseRef(base)}`], { network: true });
+    if (isolated) {
+      const transport = await transportRepo(repo);
+      await serverGit(["--git-dir", transport, "fetch", "--no-tags", origin!, `+refs/heads/${base}:refs/heads/${base}`], {
+        network: true,
+      });
+      // Agents read the objects through the file system, so the folder has to be readable to them.
+      await run("chmod", ["-R", "a+rX", transport]);
+      // The agent user needs safe.directory in its own global git config for this folder, which the
+      // entrypoint sets, because the transport repository belongs to root.
+      await git(repo, ["fetch", "--no-tags", transport, `+refs/heads/${base}:${dotBaseRef(base)}`]);
+    } else {
+      await git(repo, ["fetch", "--no-tags", "origin", `+refs/heads/${base}:${dotBaseRef(base)}`], { network: true });
+    }
     return { ref: dotBaseRef(base), note: null };
   } catch (err) {
     const ref = await resolveBaseRef(repo, base);
@@ -294,7 +354,9 @@ export async function remoteUrl(repo: string, remote = "origin"): Promise<string
 export async function cloneRepo(url: string, dest: string): Promise<string> {
   mkdirSync(dirname(dest), { recursive: true });
   try {
-    await git(dirname(dest), ["clone", url, dest], { network: true, timeoutMs: 15 * 60_000 });
+    // A fresh clone has no config an agent could have planted, so the server may run this one itself.
+    await git(dirname(dest), ["clone", url, dest], { network: true, timeoutMs: 15 * 60_000, trusted: true });
+    handOver(dest, true);
   } catch (err) {
     rmSync(dest, { recursive: true, force: true });
     throw err;
@@ -306,8 +368,33 @@ export async function branchExistsLocally(repo: string, branch: string): Promise
   return branchExists(repo, branch);
 }
 
-export async function pushBranch(repo: string, branch: string, remote = "origin"): Promise<void> {
-  await git(repo, ["push", remote, `refs/heads/${branch}:refs/heads/${branch}`], { network: true });
+// Pushes the branch and returns the commit that was pushed.
+// `origin` and `base` matter only in an isolated Dot, see the transport repositories above.
+export async function pushBranch(repo: string, branch: string, options: { origin?: string | null; base?: string; remote?: string } = {}): Promise<string> {
+  if (!isolated) {
+    await git(repo, ["push", options.remote ?? "origin", `refs/heads/${branch}:refs/heads/${branch}`], { network: true });
+    return branchHead(repo, branch);
+  }
+  if (!options.origin) {
+    throw new Error("Set the repository's host, owner and name in the project settings. A deployed Dot pushes to the address they give, not to the repository's own origin.");
+  }
+  const transport = await transportRepo(repo);
+  const bundle = join(transportDir, "bundles", `${repoKey(repo)}-${branch.replace(/[^\w.-]+/g, "_")}.bundle`);
+  rmSync(bundle, { force: true });
+  try {
+    // The agent writes the bundle. Only commits the base branch lacks go in it.
+    const exclude = options.base ? [`^${await resolveBaseRef(repo, options.base)}`] : [];
+    await git(repo, ["bundle", "create", bundle, `refs/heads/${branch}`, ...exclude]);
+    // The file came from an agent: take it only as a plain file.
+    const info = lstatSync(bundle);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error("The bundle is not a regular file.");
+    await serverGit(["--git-dir", transport, "fetch", "--no-tags", bundle, `+refs/heads/${branch}:refs/heads/${branch}`]);
+  } finally {
+    rmSync(bundle, { force: true });
+  }
+  const head = (await serverGit(["--git-dir", transport, "rev-parse", `refs/heads/${branch}`])).trim();
+  await serverGit(["--git-dir", transport, "push", options.origin, `refs/heads/${branch}:refs/heads/${branch}`], { network: true });
+  return head;
 }
 
 // Files that would conflict when merging `branch` into `base`, computed in memory with
@@ -334,6 +421,7 @@ export async function deleteBranch(repo: string, branch: string): Promise<void> 
 
 const MAX_FILE_PATCH = 100_000;
 const MAX_TOTAL_PATCH = 600_000;
+const MIN_FILE_PATCH = 4_000;
 
 // `baseRef` is what the diff is computed against (see resolveBaseRef). `base` is the branch name to show.
 export async function branchDiff(worktree: string, baseRef: string, branch: string, base: string): Promise<TaskDiff> {
@@ -376,10 +464,12 @@ export async function branchDiff(worktree: string, baseRef: string, branch: stri
     const stat = counts.get(path);
     const binary = stat?.binary ?? /^Binary files /m.test(chunk);
 
-    const limit = Math.min(MAX_FILE_PATCH, budget);
+    // Every file keeps a minimum slice, so large files early in the list can't use up the whole budget
+    // and leave later files with no patch at all.
+    const limit = Math.max(MIN_FILE_PATCH, Math.min(MAX_FILE_PATCH, budget));
     const truncated = chunk.length > limit;
     const body = truncated ? chunk.slice(0, Math.max(0, limit)) : chunk;
-    budget -= body.length;
+    budget = Math.max(0, budget - body.length);
 
     files.push({
       path,

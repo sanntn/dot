@@ -18,21 +18,35 @@ export const EXECUTOR_ALLOWED_TOOLS = [
   "mcp__dot__submit_execution_report",
 ];
 
+// Git subcommands that leave the task branch or reach the network.
+const DENIED_GIT_COMMANDS = [
+  "push",
+  "send-pack",
+  "pull",
+  "fetch",
+  "remote",
+  "submodule",
+  "checkout",
+  "switch",
+  "worktree",
+  "branch",
+  "tag",
+  "config",
+  "update-ref",
+  "symbolic-ref",
+];
+
+// A rule is a text match on the command line, so it is a speed bump and not a fence: a script or an
+// interpreter still gets past it. The leading * catches the command after env, sh -c, cd x && and
+// the like. `git -*` catches options placed before the subcommand (git -c k=v push, git --no-pager push).
+// Anything that must hold needs an OS sandbox around the agent's shell, not a rule here.
 export const EXECUTOR_DENIED_TOOLS = [
-  "Bash(git push*)",
-  "Bash(git pull*)",
-  "Bash(git fetch*)",
-  "Bash(git remote*)",
-  "Bash(git checkout*)",
-  "Bash(git switch*)",
-  "Bash(git worktree*)",
-  "Bash(git branch*)",
-  "Bash(git tag*)",
-  "Bash(git config*)",
-  "Bash(git update-ref*)",
-  "Bash(git -C*)",
-  "Bash(git --git-dir*)",
-  "Bash(git --work-tree*)",
+  ...DENIED_GIT_COMMANDS.flatMap((command) => [`Bash(git ${command}*)`, `Bash(*git ${command}*)`]),
+  "Bash(git -*)",
+  "Bash(*git -*)",
+  // Environment variables and files that change what git does or where it connects.
+  "Bash(*GIT_*)",
+  "Bash(*.git/config*)",
 ];
 
 export const EXECUTOR_SYSTEM_PROMPT = `

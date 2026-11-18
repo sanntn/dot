@@ -1,62 +1,136 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 // Single-user password login for a Dot that is reachable over a network.
-// DOT_PASSWORD turns it on. The session is a signed cookie, so nothing is stored on the server and
-// a restart does not sign you out. Changing DOT_PASSWORD (or DOT_SESSION_SECRET) signs everyone out.
+// DOT_PASSWORD turns it on. The session is a signed cookie, so a restart does not sign you out.
+// The signing key comes from a random secret, not from the password, so a copied cookie gives an
+// attacker nothing to guess the password from. The secret is DOT_SESSION_SECRET when set, otherwise
+// one Dot generates once and keeps in its data folder. Changing DOT_PASSWORD or the secret signs
+// everyone out. So does Sign out: it revokes every cookie issued before it.
 
 const COOKIE = "dot_session";
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_FAILURES = 5;
 const LOCKOUT_MS = 60_000;
+const MAX_TRACKED_CLIENTS = 1000;
 
 const digest = (value: string) => createHash("sha256").update(value).digest();
 const sameText = (a: string, b: string) => timingSafeEqual(digest(a), digest(b));
 
-export class Auth {
-  private failures = 0;
-  private lockedUntil = 0;
-  private readonly key: Buffer;
+type State = { secret: string; revokedBefore: number };
 
-  constructor(private readonly password: string | null, secret: string | null) {
-    this.key = digest(`dot-session:${secret || password || ""}`);
+export class Auth {
+  private readonly attempts = new Map<string, { failures: number; lockedUntil: number }>();
+  private readonly key: Buffer;
+  private state: State;
+
+  // `stateFile` holds the generated secret and the sign-out time. Null keeps them in memory only.
+  constructor(
+    private readonly password: string | null,
+    envSecret: string | null,
+    private readonly stateFile: string | null = null,
+  ) {
+    this.state = this.loadState(envSecret);
+    this.key = digest(`dot-session:${this.state.secret}:${digest(password ?? "").toString("hex")}`);
+  }
+
+  private loadState(envSecret: string | null): State {
+    let saved: Partial<State> = {};
+    if (this.stateFile) {
+      try {
+        saved = JSON.parse(readFileSync(this.stateFile, "utf8")) as Partial<State>;
+      } catch {
+        // First start, or an unreadable file. A new one is written below.
+      }
+    }
+    const state: State = {
+      secret: envSecret || (typeof saved.secret === "string" && saved.secret ? saved.secret : randomBytes(32).toString("hex")),
+      revokedBefore: typeof saved.revokedBefore === "number" ? saved.revokedBefore : 0,
+    };
+    this.fromEnv = Boolean(envSecret);
+    if (this.password !== null && !this.fromEnv && saved.secret !== state.secret) this.save(state);
+    return state;
+  }
+
+  private fromEnv = false;
+
+  private save(state: State): void {
+    if (!this.stateFile) return;
+    try {
+      mkdirSync(dirname(this.stateFile), { recursive: true });
+      // A secret from DOT_SESSION_SECRET stays in the environment and is never written to disk.
+      const saved: State = { ...state, secret: this.fromEnv ? "" : state.secret };
+      writeFileSync(this.stateFile, JSON.stringify(saved), { mode: 0o600 });
+    } catch (err) {
+      console.error("Could not save the session state. A restart will sign everyone out:", err);
+    }
   }
 
   get enabled(): boolean {
     return this.password !== null;
   }
 
-  private sign(expires: number): string {
-    return createHmac("sha256", this.key).update(String(expires)).digest("base64url");
+  private sign(payload: string): string {
+    return createHmac("sha256", this.key).update(payload).digest("base64url");
   }
 
   isSignedIn(c: Context): boolean {
     if (!this.enabled) return true;
     const cookie = getCookie(c, COOKIE);
     if (!cookie) return false;
-    const [expires, signature] = cookie.split(".");
-    if (!expires || !signature || !/^\d+$/.test(expires) || Number(expires) < Date.now()) return false;
-    return sameText(signature, this.sign(Number(expires)));
+    const [issued, expires, signature, ...extra] = cookie.split(".");
+    if (!issued || !expires || !signature || extra.length > 0) return false;
+    if (!/^\d+$/.test(issued) || !/^\d+$/.test(expires)) return false;
+    if (Number(expires) < Date.now() || Number(issued) <= this.state.revokedBefore) return false;
+    return sameText(signature, this.sign(`${issued}.${expires}`));
+  }
+
+  // Who is asking, for the failed-login counter. Behind a proxy every request comes from the proxy,
+  // so DOT_TRUST_PROXY=true reads the address the proxy appended to X-Forwarded-For (the last entry).
+  // Without a proxy that header is client-controlled, so it is ignored.
+  private clientKey(c: Context): string {
+    if (process.env.DOT_TRUST_PROXY === "true") {
+      const last = c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim();
+      if (last) return last;
+    }
+    try {
+      return getConnInfo(c).remote.address ?? "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private forgetOldClients(now: number): void {
+    if (this.attempts.size < MAX_TRACKED_CLIENTS) return;
+    for (const [client, entry] of this.attempts) if (entry.lockedUntil < now) this.attempts.delete(client);
+    if (this.attempts.size >= MAX_TRACKED_CLIENTS) this.attempts.clear();
   }
 
   // Returns an error message, or null when the password was right and the cookie is set.
   signIn(c: Context, supplied: string): string | null {
     const now = Date.now();
-    if (now < this.lockedUntil) {
-      return `Too many wrong passwords. Try again in ${Math.ceil((this.lockedUntil - now) / 1000)} seconds.`;
+    const client = this.clientKey(c);
+    const entry = this.attempts.get(client) ?? { failures: 0, lockedUntil: 0 };
+    if (now < entry.lockedUntil) {
+      return `Too many wrong passwords. Try again in ${Math.ceil((entry.lockedUntil - now) / 1000)} seconds.`;
     }
     if (!this.password || !sameText(supplied, this.password)) {
-      this.failures++;
-      if (this.failures >= MAX_FAILURES) {
-        this.failures = 0;
-        this.lockedUntil = now + LOCKOUT_MS;
+      this.forgetOldClients(now);
+      entry.failures++;
+      if (entry.failures >= MAX_FAILURES) {
+        entry.failures = 0;
+        entry.lockedUntil = now + LOCKOUT_MS;
       }
+      this.attempts.set(client, entry);
       return "Wrong password";
     }
-    this.failures = 0;
+    this.attempts.delete(client);
     const expires = now + SESSION_MS;
-    setCookie(c, COOKIE, `${expires}.${this.sign(expires)}`, {
+    setCookie(c, COOKIE, `${now}.${expires}.${this.sign(`${now}.${expires}`)}`, {
       httpOnly: true,
       sameSite: "Strict",
       // Coolify's proxy ends TLS, so the request itself arrives as plain http.
@@ -67,7 +141,10 @@ export class Auth {
     return null;
   }
 
+  // Revokes every cookie issued so far, on every device, not only this browser's copy.
   signOut(c: Context): void {
+    this.state = { ...this.state, revokedBefore: Date.now() };
+    this.save(this.state);
     deleteCookie(c, COOKIE, { path: "/" });
   }
 

@@ -24,7 +24,9 @@ export const RESEARCHER_ALLOWED_TOOLS = [
 ];
 
 // Deny rules win over allow rules. git log, show and diff can write files with --output.
-export const RESEARCHER_DENIED_TOOLS = ["Bash(*--output*)"];
+// git diff --no-index compares two paths on disk and prints them, so it reads any file the user
+// can read, outside the repository too.
+export const RESEARCHER_DENIED_TOOLS = ["Bash(*--output*)", "Bash(*--no-index*)", "Bash(*GIT_*)"];
 
 export const RESEARCHER_SYSTEM_PROMPT = `
 You are the research agent in Dot, a kanban board where Claude agents carry a task from idea to merged code.
