@@ -1,0 +1,232 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { serve } from "@hono/node-server";
+import { ProjectInputSchema, type Column, type Task } from "@dot/shared";
+import { createApp } from "../src/app.ts";
+import { Auth } from "../src/auth.ts";
+import { openDb } from "../src/db.ts";
+import { EventBus } from "../src/events.ts";
+import { Orchestrator } from "../src/orchestrator.ts";
+import { Store } from "../src/store.ts";
+
+// These tests run the real orchestrator, store, MCP endpoint and git worktrees. Only the claude CLI
+// is replaced, by fake-claude.mjs, which follows a script. See that file for the script format.
+
+const here = dirname(fileURLToPath(import.meta.url));
+
+type Step = { say: string } | { tool: string; args?: unknown } | { commit: { file: string; content: string; message: string } };
+type Launch = { name?: string; turns: Step[][] };
+
+const plan = {
+  goal: "Add a greeting file.",
+  context: "The repo is empty apart from a readme.",
+  acceptanceCriteria: ["hello.txt exists and says hello"],
+  filesToTouch: [{ path: "hello.txt", change: "create it" }],
+  steps: ["Create hello.txt"],
+  testPlan: "Read the file.",
+  risks: [],
+  assumptions: [],
+};
+const report = { summary: "Added hello.txt.", deviations: [], verification: [], followUps: [] };
+const review = (verdict: "approve" | "changes_requested") => ({
+  verdict,
+  summary: verdict === "approve" ? "Looks right." : "One problem.",
+  criteria: [{ criterion: plan.acceptanceCriteria[0], status: verdict === "approve" ? "met" : "not_met", evidence: "Read the file." }],
+  issues: verdict === "approve" ? [] : [{ severity: "blocking", title: "Wrong text", details: "It should say hello." }],
+  checks: [],
+});
+const commit = { commit: { file: "hello.txt", content: "hello\n", message: "Add hello.txt" } };
+
+async function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const probe = createNetServer().listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() as { port: number };
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+const cleanups: (() => void | Promise<void>)[] = [];
+after(async () => {
+  for (const fn of cleanups.reverse()) await fn();
+});
+
+async function harness(launches: Launch[]) {
+  const dir = mkdtempSync(join(tmpdir(), "dot-pipeline-"));
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir);
+  copyFileSync(join(here, "fake-claude.mjs"), join(binDir, "fake-claude.mjs"));
+  writeFileSync(join(binDir, "scenario.json"), JSON.stringify({ launches }));
+  process.env.DOT_CLAUDE_BIN = join(binDir, "fake-claude.mjs");
+
+  const repo = join(dir, "repo");
+  mkdirSync(repo);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd: repo, stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(repo, "README.md"), "# repo\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "Initial commit");
+
+  const store = new Store(openDb(":memory:"));
+  const bus = new EventBus();
+  const port = await freePort();
+  const orchestrator = new Orchestrator(store, bus, {
+    port,
+    maxAgents: 1,
+    model: "fake",
+    worktreesDir: join(dir, "worktrees"),
+    guardRules: [],
+  });
+  const app = createApp(store, bus, orchestrator, {
+    attachmentsDir: join(dir, "attachments"),
+    reposDir: join(dir, "repos"),
+    auth: new Auth(null, null, null),
+  });
+  const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" });
+  cleanups.push(async () => {
+    orchestrator.shutdown();
+    server.close();
+    // Git may still hold a worktree for a moment on Windows.
+    for (let i = 0; i < 5; i++) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+  });
+
+  const project = store.createProject(ProjectInputSchema.parse({ name: "Test", repoPath: repo, baseBranch: "main" }));
+  const task = store.createTask({ projectId: project.id, title: "Add a greeting", description: "Make hello.txt.", blockedBy: [] });
+
+  const calls = () =>
+    readFileSync(join(binDir, "calls.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  async function until(what: string, check: (task: Task) => boolean, ms = 15_000): Promise<Task> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const current = store.getTask(task.id);
+      if (check(current)) return current;
+      if (Date.now() > deadline) {
+        const messages = store.listMessages(task.id).map((m) => `${m.kind}: ${m.text}`);
+        assert.fail(`Timed out waiting for ${what}. Task is in ${current.column}, needsInput=${current.needsInput}.\n${messages.join("\n")}`);
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  const inColumn = (column: Column) => (t: Task) => t.column === column && t.agentState !== "running" && t.agentState !== "queued";
+
+  return { store, orchestrator, task, repo, calls, until, inColumn };
+}
+
+test("a task goes from the inbox to merge approval through three agents", async () => {
+  const h = await harness([
+    { name: "researcher", turns: [[{ say: "Reading the repo." }, { tool: "submit_plan", args: plan }]] },
+    { name: "executor", turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { name: "reviewer", turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  assert.equal(h.store.latestPlan(h.task.id)?.plan.goal, plan.goal);
+
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("review", (t) => t.column === "review");
+  const executed = h.store.getTask(h.task.id);
+  assert.match(executed.branch ?? "", /^dot\/\d+-add-a-greeting$/);
+  assert.equal(h.store.latestExecutionReport(h.task.id)?.report.summary, report.summary);
+  assert.deepEqual(
+    h.store.latestExecutionReport(h.task.id)?.commits.map((c) => c.subject),
+    ["Add hello.txt"],
+  );
+
+  await h.until("merge approval", h.inColumn("merge_approval"));
+  assert.equal(h.store.latestReview(h.task.id)?.review.verdict, "approve");
+
+  // The executor ran inside the task's worktree, and the researcher in the repo itself.
+  const launches = h.calls().filter((c) => "prompt" in c);
+  assert.equal(launches.length, 3);
+  assert.equal(launches[1]!.cwd, executed.worktreePath);
+  assert.notEqual(launches[0]!.cwd, executed.worktreePath);
+  assert.match(String(launches[1]!.prompt), /hello\.txt/);
+
+  // Cost from each run is recorded.
+  const runs = h.orchestrator.runsFor(h.task.id);
+  assert.equal(runs.length, 3);
+  assert.ok(runs.every((r) => r.costUsd > 0));
+});
+
+test("ask_human flags the task and the answer resumes the same session", async () => {
+  const h = await harness([
+    { turns: [[{ tool: "ask_human", args: { question: "Which greeting?", choices: ["hello", "hi"] } }], [{ tool: "submit_plan", args: plan }]] },
+  ]);
+
+  h.orchestrator.startResearch(h.task.id);
+  const waiting = await h.until("a question", (t) => t.needsInput);
+  assert.equal(waiting.column, "research");
+  const question = h.store.listMessages(h.task.id).find((m) => m.kind === "question");
+  assert.equal(question?.text, "Which greeting?");
+
+  h.orchestrator.sendMessage(h.task.id, { stage: "research", text: "hello", attachmentIds: [] });
+  const planned = await h.until("plan review", (t) => t.column === "plan_review");
+  assert.equal(planned.needsInput, false);
+  // Both turns went to one process, so the fake saw one launch with two prompts.
+  const prompts = h.calls().filter((c) => "prompt" in c);
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1]!.prompt, "hello");
+});
+
+test("a stage that ends without submitting is nudged once, then flagged", async () => {
+  const h = await harness([{ turns: [[{ say: "Thinking." }], [{ say: "Still thinking." }]] }]);
+
+  h.orchestrator.startResearch(h.task.id);
+  const stuck = await h.until("a flag", (t) => t.needsInput);
+  assert.equal(stuck.column, "research");
+
+  const prompts = h.calls().filter((c) => "prompt" in c);
+  assert.equal(prompts.length, 2);
+  assert.match(String(prompts[1]!.prompt), /without calling submit_plan/);
+  assert.ok(h.store.listMessages(h.task.id).some((m) => /stopped without a plan/.test(m.text)));
+});
+
+test("a reviewer that requests changes sends the task back to the executor", async () => {
+  const h = await harness([
+    { turns: [[{ tool: "submit_plan", args: plan }]] },
+    { turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { turns: [[{ tool: "submit_review", args: review("changes_requested") }]] },
+    {
+      turns: [
+        [
+          { commit: { file: "hello.txt", content: "hello world\n", message: "Fix the text" } },
+          { tool: "submit_execution_report", args: { ...report, fixes: ["Fixed the text"] } },
+        ],
+      ],
+    },
+    { turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  await h.orchestrator.approvePlan(h.task.id);
+
+  await h.until("merge approval", h.inColumn("merge_approval"), 30_000);
+  assert.equal(h.store.latestReview(h.task.id)?.version, 2);
+  assert.deepEqual(
+    h.store.latestExecutionReport(h.task.id)?.commits.map((c) => c.subject),
+    ["Fix the text", "Add hello.txt"],
+  );
+  // The fix round got the reviewer's issue list.
+  const fixPrompt = h.calls().filter((c) => "prompt" in c)[3];
+  assert.match(String(fixPrompt?.prompt), /Wrong text/);
+});

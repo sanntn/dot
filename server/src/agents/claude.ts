@@ -87,7 +87,7 @@ function cleanEnv(configDir: string | null, tokenName: string | null = null): No
 // Asks the CLI which account a config folder is logged into.
 export function claudeAccount(configDir: string | null, tokenName: string | null = null): Promise<ClaudeAccount> {
   return new Promise((resolve, reject) => {
-    const [command, args] = asAgent(claudeBinary(), ["auth", "status", "--json"]);
+    const [command, args] = asAgent(...claudeCommand(["auth", "status", "--json"]));
     execFile(
       command,
       args,
@@ -140,7 +140,7 @@ export function startClaudeLogin(configDir: string): Promise<string> {
   writeFileSync(script, windows ? `@echo %1> "${urlFile}"\r\n` : `#!/bin/sh\nprintf '%s' "$1" > "${urlFile}"\n`);
   if (!windows) chmodSync(script, 0o755);
 
-  const [loginCommand, loginArgs] = asAgent(claudeBinary(), ["auth", "login"]);
+  const [loginCommand, loginArgs] = asAgent(...claudeCommand(["auth", "login"]));
   const child = spawn(loginCommand, loginArgs, {
     env: { ...cleanEnv(configDir), BROWSER: script },
     windowsHide: true,
@@ -200,6 +200,13 @@ export function claudeBinary(): string {
   return process.env.DOT_CLAUDE_BIN || "claude";
 }
 
+// The command that runs the CLI with these arguments. A .js or .mjs path runs under Node, which is
+// how the tests point DOT_CLAUDE_BIN at a scripted stand-in on every platform.
+export function claudeCommand(args: string[]): [string, string[]] {
+  const bin = claudeBinary();
+  return /.m?js$/.test(bin) ? [process.execPath, [bin, ...args]] : [bin, args];
+}
+
 export class ClaudeProcess {
   private readonly child: ChildProcess;
   private stdinClosed = false;
@@ -242,7 +249,7 @@ export class ClaudeProcess {
       ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
     ];
 
-    const [command, wrapped] = asAgent(claudeBinary(), args);
+    const [command, wrapped] = asAgent(...claudeCommand(args));
     this.child = spawn(command, wrapped, {
       cwd: options.cwd,
       env: cleanEnv(options.configDir, options.tokenName),
