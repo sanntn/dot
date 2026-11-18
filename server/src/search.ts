@@ -32,7 +32,7 @@ export function searchTasks(db: Db, input: string, options: { projectId?: number
   const limit = options.limit ?? 20;
   const rows = db
     .prepare(
-      `SELECT s.task_id, s.kind, snippet(search, 3, ?, ?, '...', 14) AS snippet, bm25(search) AS rank,
+      `SELECT s.task_id, s.kind, snippet(search, 2, ?, ?, '...', 14) AS snippet, bm25(search) AS rank,
               t.project_id, t.number, t.title, t.column_key, p.name AS project_name
        FROM search s
        JOIN tasks t ON t.id = s.task_id

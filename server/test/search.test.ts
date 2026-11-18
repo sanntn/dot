@@ -55,7 +55,11 @@ test("finds words inside plans, and an edit or a delete updates the index", () =
   assert.equal(s.store.search("bundler").length, 1);
   assert.equal(s.store.search("pipeline").length, 0);
 
+  s.store.addMessage({ taskId: t.id, runId: null, role: "agent", kind: "text", text: "Remember the zebra flag.", data: null });
+  assert.equal(s.store.search("zebra").length, 1);
+
   s.store.deleteTask(t.id);
+  assert.equal(s.store.search("zebra").length, 0);
   assert.equal(s.store.search("incremental").length, 0);
   assert.equal(s.store.search("bundler").length, 0);
 });

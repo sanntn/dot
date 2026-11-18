@@ -56,8 +56,8 @@ export function startNotifier(
     }
     // The task moved on during the delay, so there is nothing to tell you.
     if (laneOf(task) !== "needs_you") return;
-    const questions = store.listMessages(taskId).filter((m) => m.kind === "question");
-    const question = task.needsInput ? (questions.at(-1)?.text ?? null) : null;
+    // Only a question still waiting for you. A budget pause or a stuck agent has none to quote.
+    const question = task.needsInput ? (store.latestOpenQuestion(taskId)?.text ?? null) : null;
     const project = store.getProject(task.projectId).name;
     const title = `${project} #${task.number} needs you`;
     const body = `${clip(task.title, 120)}\n${reason(task, question ? clip(question, 300) : null)}`;

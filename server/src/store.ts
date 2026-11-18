@@ -509,6 +509,18 @@ export class Store {
     return rows.map(toMessage);
   }
 
+  // The newest question nobody has answered yet, or null. Pauses and failures raise Needs input without a question.
+  latestOpenQuestion(taskId: number): ChatMessage | null {
+    const row = this.db
+      .prepare(
+        `SELECT m.*, r.stage FROM messages m LEFT JOIN runs r ON r.id = m.run_id
+         WHERE m.task_id = ? AND m.kind = 'question' AND (m.data IS NULL OR json_extract(m.data, '$.answered') IS NOT 1)
+         ORDER BY m.id DESC LIMIT 1`,
+      )
+      .get(taskId) as Row | undefined;
+    return row ? toMessage(row) : null;
+  }
+
   // Once the user replies to a run, its open questions no longer need quick-reply buttons.
   markQuestionsAnswered(runId: number): void {
     const rows = this.db
@@ -680,10 +692,18 @@ export class Store {
 
   addRule(projectId: number, text: string, status: RuleStatus, sourceTaskId: number | null = null): ProjectRule | null {
     this.getProject(projectId);
-    // The same rule, in any status, is not added twice. A dismissed one stays dismissed.
+    // The same rule is not added twice, whatever its status.
     const key = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
-    const existing = this.db.prepare("SELECT text FROM project_rules WHERE project_id = ?").all(projectId) as { text: string }[];
-    if (existing.some((r) => key(r.text) === key(text))) return null;
+    const existing = this.db
+      .prepare("SELECT id, text, status FROM project_rules WHERE project_id = ?")
+      .all(projectId) as { id: number; text: string; status: RuleStatus }[];
+    const same = existing.find((r) => key(r.text) === key(text));
+    if (same) {
+      // A rule you write yourself brings back one you removed, or accepts the reviewer's suggestion of it.
+      // The reviewer's own suggestions never do, so a dismissed rule stays hidden from it.
+      if (status === "active" && same.status !== "active") return this.updateRule(same.id, { status: "active" });
+      return null;
+    }
     const result = this.db
       .prepare("INSERT INTO project_rules (project_id, text, status, source_task_id, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(projectId, text, status, sourceTaskId, now());

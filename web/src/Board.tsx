@@ -378,7 +378,11 @@ export function Board(props: {
                   onStart={() => props.onStart(task)}
                   onStop={() => props.onStop(task)}
                   onDelete={() => props.onDelete(task)}
-                  onMoveToLane={(target) => onMove(task, { column: LANE_ENTRY[target], beforeTaskId: null })}
+                  onMoveToLane={(target) => {
+                    // On a phone only one lane shows. Follow the card there, or it would seem to vanish.
+                    setPicked(target);
+                    onMove(task, { column: LANE_ENTRY[target], beforeTaskId: null });
+                  }}
                   onPointerDown={(e) => onPointerDown(e, task)}
                   onPointerMove={onPointerMove}
                   onPointerUp={(e) => onPointerEnd(e, true)}

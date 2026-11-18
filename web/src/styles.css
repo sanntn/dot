@@ -212,6 +212,10 @@
   [data-slot="tabs-trigger"] {
     min-height: 2.5rem;
   }
+  /* Icon buttons are square. Their size classes fix the width, so the height rule above would make them oblong. */
+  :is([data-slot="button"], [data-slot="sheet-close"]):where([class~="size-6"], [class~="size-7"], [class~="size-8"], [class~="size-9"]) {
+    min-width: 2.5rem;
+  }
   [data-slot="tabs-list"] {
     height: auto;
   }

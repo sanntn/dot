@@ -122,7 +122,7 @@ export function ReviewPanel({ task, artifact, working }: { task: Task; artifact:
               </MoreDetails>
             )}
 
-            <RuleSuggestions task={task} />
+            <RuleSuggestions task={task} reviewVersion={artifact.version} />
           </>
         )}
       </div>

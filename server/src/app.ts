@@ -413,7 +413,7 @@ export function createApp(
   app.post("/projects/:id/rules", async (c) => {
     const { text } = await parseBody(c, RuleInputSchema);
     const rule = store.addRule(idParam(c), text, "active");
-    if (!rule) throw new HttpError(409, "The project already has this rule, or you dismissed it before.");
+    if (!rule) throw new HttpError(409, "The project already has this rule.");
     return c.json(rule, 201);
   });
   app.patch("/rules/:id", async (c) => c.json(store.updateRule(idParam(c), await parseBody(c, RulePatchSchema))));

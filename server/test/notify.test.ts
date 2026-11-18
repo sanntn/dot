@@ -110,3 +110,23 @@ test("a webhook that answers with an error is logged, not thrown", async () => {
   s.stop();
   assert.deepEqual(s.logs, ["Notification webhook answered 500."]);
 });
+
+test("a pause with no new question does not quote an answered one", async () => {
+  const s = setup();
+  const t = s.task("Budget pause");
+  s.store.moveTask(t.id, { column: "research", beforeTaskId: null });
+  const old = s.store.addMessage({ taskId: t.id, runId: null, role: "agent", kind: "question", text: "Which provider?", data: null });
+  // The user answered it, so it is marked answered. A budget pause then flags the task without a question.
+  s.store.addMessage({ taskId: t.id, runId: null, role: "user", kind: "text", text: "Stripe", data: null });
+  s.store["db"].prepare("UPDATE messages SET data = ? WHERE id = ?").run(JSON.stringify({ answered: true }), old.id);
+  s.start();
+  s.store.setNeedsInput(t.id, true);
+  s.changed();
+  await settle();
+  s.stop();
+
+  assert.equal(s.calls.length, 1);
+  const body = JSON.parse(String(s.calls[0]!.init.body));
+  assert.doesNotMatch(body.text, /Which provider/);
+  assert.match(body.text, /asked you a question/);
+});

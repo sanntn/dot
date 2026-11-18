@@ -245,6 +245,67 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX project_rules_project ON project_rules(project_id, status);
   `,
+  `
+  -- The search index again, with fixed rowids: task id * 4 plus 0 for a task, 1 for a message, 2 for an artifact.
+  -- Updates and deletes then find their row by rowid. Filtering on the UNINDEXED columns scanned the whole table.
+  DROP TRIGGER search_task_insert;
+  DROP TRIGGER search_task_update;
+  DROP TRIGGER search_task_delete;
+  DROP TRIGGER search_message_insert;
+  DROP TRIGGER search_artifact_insert;
+  DROP TABLE search;
+  CREATE VIRTUAL TABLE search USING fts5(
+    kind UNINDEXED,
+    task_id UNINDEXED,
+    body,
+    tokenize = 'unicode61 remove_diacritics 2',
+    prefix = '2 3'
+  );
+
+  INSERT INTO search (rowid, kind, task_id, body)
+    SELECT id * 4, 'task', id, title || char(10) || description FROM tasks;
+  INSERT INTO search (rowid, kind, task_id, body)
+    SELECT id * 4 + 1, 'message', task_id, text FROM messages WHERE kind IN ('text', 'question', 'error') AND text <> '';
+  INSERT INTO search (rowid, kind, task_id, body)
+    SELECT id * 4 + 2,
+      CASE type WHEN 'execution_report' THEN 'report' ELSE type END,
+      task_id,
+      (SELECT group_concat(value, char(10)) FROM json_tree(payload) WHERE type = 'text')
+    FROM artifacts WHERE type IN ('plan', 'execution_report', 'review');
+
+  CREATE TRIGGER search_task_insert AFTER INSERT ON tasks BEGIN
+    INSERT INTO search (rowid, kind, task_id, body) VALUES (new.id * 4, 'task', new.id, new.title || char(10) || new.description);
+  END;
+  CREATE TRIGGER search_task_update AFTER UPDATE OF title, description ON tasks BEGIN
+    DELETE FROM search WHERE rowid = old.id * 4;
+    INSERT INTO search (rowid, kind, task_id, body) VALUES (new.id * 4, 'task', new.id, new.title || char(10) || new.description);
+  END;
+  CREATE TRIGGER search_task_delete AFTER DELETE ON tasks BEGIN
+    DELETE FROM search WHERE rowid = old.id * 4;
+  END;
+  CREATE TRIGGER search_message_insert AFTER INSERT ON messages
+    WHEN new.kind IN ('text', 'question', 'error') AND new.text <> ''
+  BEGIN
+    INSERT INTO search (rowid, kind, task_id, body) VALUES (new.id * 4 + 1, 'message', new.task_id, new.text);
+  END;
+  CREATE TRIGGER search_message_delete AFTER DELETE ON messages BEGIN
+    DELETE FROM search WHERE rowid = old.id * 4 + 1;
+  END;
+  CREATE TRIGGER search_artifact_insert AFTER INSERT ON artifacts
+    WHEN new.type IN ('plan', 'execution_report', 'review')
+  BEGIN
+    INSERT INTO search (rowid, kind, task_id, body)
+    VALUES (
+      new.id * 4 + 2,
+      CASE new.type WHEN 'execution_report' THEN 'report' ELSE new.type END,
+      new.task_id,
+      (SELECT group_concat(value, char(10)) FROM json_tree(new.payload) WHERE type = 'text')
+    );
+  END;
+  CREATE TRIGGER search_artifact_delete AFTER DELETE ON artifacts BEGIN
+    DELETE FROM search WHERE rowid = old.id * 4 + 2;
+  END;
+  `,
 ];
 
 export type Db = DatabaseSync;

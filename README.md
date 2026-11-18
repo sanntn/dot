@@ -34,7 +34,7 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 | `DOT_CLAUDE_BIN` | `claude` | Path to the CLI, if it isn't on `PATH` |
 | `DOT_PORT` | `4317` | API port |
 | `DOT_DB` | `data/dot.db` | Database file |
-| `DOT_<NAME>_FILE` | none | Reads a secret from a file instead of `.env`. Works for `DOT_PASSWORD`, `DOT_SESSION_SECRET`, `DOT_BITBUCKET_TOKEN`, `DOT_GITHUB_TOKEN`, `DOT_CLAUDE_TOKEN` and `DOT_CLAUDE_TOKEN_<NAME>`. For example `DOT_GITHUB_TOKEN_FILE=/home/me/.dot/github-token`. A value set directly wins. Docker and Coolify secret mounts (`/run/secrets/...`) work the same way. |
+| `DOT_<NAME>_FILE` | none | Reads a secret from a file instead of `.env`. Works for `DOT_PASSWORD`, `DOT_SESSION_SECRET`, `DOT_BITBUCKET_TOKEN`, `DOT_GITHUB_TOKEN`, `DOT_CLAUDE_TOKEN` and `DOT_CLAUDE_TOKEN_<NAME>`. For example `DOT_GITHUB_TOKEN_FILE=/home/me/.dot/github-token`. A value set directly wins. Docker and Coolify secret mounts (`/run/secrets/...`) work the same way, but in the image the file must be readable by root only (mode `0400`). Docker mounts secrets world-readable by default, and Dot refuses to start while the agent user can read one. |
 | `DOT_AGENT_SANDBOX` | off | Set to `on` to run every agent command inside Claude Code's own sandbox, with Dot's private files unreadable. See Agent isolation. |
 | `DOT_BACKUP_KEEP` | `7` | How many daily database backups to keep in `data/backups`. `0` turns backups off. |
 | `DOT_NOTIFY_URL` | none | A webhook that gets a message when a task starts waiting for you: a question, a failure, a plan to review or a change to merge. Works with ntfy, Slack and Discord incoming webhooks, or any endpoint that takes a JSON POST. |

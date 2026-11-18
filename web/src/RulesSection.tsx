@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { api, errorMessage } from "./api.ts";
 
 // The project's rules and the reviewer's suggestions. One load, shared by both views below.
-function useRules(projectId: number) {
+// `refreshKey` loads the list again, for example when a new review arrives.
+function useRules(projectId: number, refreshKey: unknown = null) {
   const [rules, setRules] = useState<ProjectRule[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,7 +20,7 @@ function useRules(projectId: number) {
     return () => {
       alive = false;
     };
-  }, [projectId]);
+  }, [projectId, refreshKey]);
 
   const act = useCallback(async (work: () => Promise<void>) => {
     setError(null);
@@ -66,8 +67,8 @@ function SuggestionRow({ rule, onAccept, onDismiss }: { rule: ProjectRule; onAcc
 }
 
 // In a task's Review tab: what this review suggests the project's agents should always do.
-export function RuleSuggestions({ task }: { task: Task }) {
-  const { rules, error, accept, remove } = useRules(task.projectId);
+export function RuleSuggestions({ task, reviewVersion }: { task: Task; reviewVersion: number }) {
+  const { rules, error, accept, remove } = useRules(task.projectId, reviewVersion);
   const mine = rules.filter((r) => r.status === "suggested" && r.sourceTaskId === task.id);
   if (mine.length === 0 && !error) return null;
   return (

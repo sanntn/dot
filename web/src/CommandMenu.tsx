@@ -79,18 +79,15 @@ function Highlighted({ text }: { text: string }) {
 
 // Searches the text inside tasks on the server, once the query has two characters and typing pauses.
 function useTextMatches(query: string): SearchHit[] {
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [found, setFound] = useState<{ query: string; hits: SearchHit[] }>({ query: "", hits: [] });
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
-      setHits([]);
-      return;
-    }
+    if (q.length < 2) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api
         .search(q, controller.signal)
-        .then(setHits)
+        .then((hits) => setFound({ query: q, hits }))
         .catch(() => {
           // A cancelled or failed search leaves the label matches in place.
         });
@@ -100,7 +97,8 @@ function useTextMatches(query: string): SearchHit[] {
       controller.abort();
     };
   }, [query]);
-  return hits;
+  // Matches that belong to an earlier query are not shown while the new one is still loading.
+  return found.query === query.trim() ? found.hits : [];
 }
 
 export function CommandMenu({
