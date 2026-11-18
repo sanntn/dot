@@ -177,6 +177,8 @@ export const TaskSchema = z.object({
   prId: z.number().int().nullable(),
   prUrl: z.string().nullable(),
   reviewRound: z.number().int(),
+  // Tasks that must be done before this one can start. Finished blockers drop off the list.
+  blockedBy: z.array(z.object({ id: z.number().int(), number: z.number().int() })),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -207,14 +209,39 @@ export const TaskInputSchema = z.object({
   projectId: z.number().int().positive(),
   title: z.string().trim().min(1, "Title is required").max(200),
   description: z.string().max(20000).default(""),
+  blockedBy: z.array(z.number().int().positive()).max(20).default([]),
 });
 export type TaskInput = z.input<typeof TaskInputSchema>;
 
 export const TaskPatchSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200).optional(),
   description: z.string().max(20000).optional(),
+  blockedBy: z.array(z.number().int().positive()).max(20).optional(),
 });
 export type TaskPatch = z.input<typeof TaskPatchSchema>;
+
+// Many tasks at once, from a pasted list. Each title becomes a task with no description.
+export const MAX_BATCH = 50;
+export const TaskBatchSchema = z.object({
+  projectId: z.number().int().positive(),
+  titles: z.array(z.string().trim().min(1).max(200)).min(1, "Add at least one title").max(MAX_BATCH),
+});
+export type TaskBatch = z.input<typeof TaskBatchSchema>;
+
+// A saved starting point for the new task form, kept per project.
+export const TemplateInputSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(100),
+  title: z.string().trim().max(200).default(""),
+  description: z.string().max(20000).default(""),
+});
+export type TemplateInput = z.input<typeof TemplateInputSchema>;
+export type TaskTemplate = {
+  id: number;
+  projectId: number;
+  name: string;
+  title: string;
+  description: string;
+};
 
 // Move a task into a column, before another task in that column.
 // beforeTaskId null puts it at the end.

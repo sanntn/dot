@@ -19,7 +19,9 @@ import {
   ProjectPatchSchema,
   SendBackSchema,
   SendMessageSchema,
+  TaskBatchSchema,
   TaskInputSchema,
+  TemplateInputSchema,
   TaskMoveSchema,
   TaskPatchSchema,
 } from "@dot/shared";
@@ -376,6 +378,23 @@ export function createApp(
     return c.json(task, 201);
   });
 
+  // Several tasks from a pasted list. One change event, so the board refetches once.
+  app.post("/tasks/batch", async (c) => {
+    const { projectId, titles } = await parseBody(c, TaskBatchSchema);
+    const tasks = titles.map((title) => store.createTask({ projectId, title, description: "", blockedBy: [] }));
+    bus.publish({ type: "tasks.changed", projectId });
+    return c.json(tasks, 201);
+  });
+
+  app.get("/projects/:id/templates", (c) => c.json(store.listTemplates(idParam(c))));
+  app.post("/projects/:id/templates", async (c) =>
+    c.json(store.addTemplate(idParam(c), await parseBody(c, TemplateInputSchema)), 201),
+  );
+  app.delete("/templates/:id", (c) => {
+    store.deleteTemplate(idParam(c));
+    return c.body(null, 204);
+  });
+
   app.patch("/tasks/:id", async (c) => {
     const task = store.updateTask(idParam(c), await parseBody(c, TaskPatchSchema));
     bus.publish({ type: "tasks.changed", projectId: task.projectId, taskId: task.id });
@@ -522,7 +541,8 @@ export function createApp(
     const path = join(dir, `${randomUUID()}.${IMAGE_EXTENSIONS[mediaType]}`);
     writeFileSync(path, bytes);
 
-    const attachment = store.addAttachment({ taskId, fileName, mediaType, size: bytes.length, path });
+    const origin = c.req.query("kind") === "task" ? "task" : "chat";
+    const attachment = store.addAttachment({ taskId, fileName, mediaType, size: bytes.length, path, origin });
     return c.json({ id: attachment.id, fileName: attachment.fileName, mediaType: attachment.mediaType }, 201);
   });
 

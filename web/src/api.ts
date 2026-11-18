@@ -20,6 +20,8 @@ import type {
   TaskInput,
   TaskMove,
   TaskPatch,
+  TaskTemplate,
+  TemplateInput,
 } from "@dot/shared";
 
 const signedOutListeners = new Set<() => void>();
@@ -73,6 +75,11 @@ export const api = {
   overview: () => request<ProjectOverview[]>("/overview"),
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),
   createTask: (input: TaskInput) => request<Task>("/tasks", "POST", input),
+  createTasks: (projectId: number, titles: string[]) => request<Task[]>("/tasks/batch", "POST", { projectId, titles }),
+  listTemplates: (projectId: number) => request<TaskTemplate[]>(`/projects/${projectId}/templates`),
+  addTemplate: (projectId: number, input: TemplateInput) =>
+    request<TaskTemplate>(`/projects/${projectId}/templates`, "POST", input),
+  deleteTemplate: (id: number) => request<void>(`/templates/${id}`, "DELETE"),
   updateTask: (id: number, patch: TaskPatch) => request<Task>(`/tasks/${id}`, "PATCH", patch),
   moveTask: (id: number, move: TaskMove) => request<Task>(`/tasks/${id}/move`, "POST", move),
   deleteTask: (id: number) => request<void>(`/tasks/${id}`, "DELETE"),
@@ -96,8 +103,9 @@ export const api = {
   approvePlan: (id: number) => request<Task>(`/tasks/${id}/plan/approve`, "POST"),
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
 
-  uploadAttachment: (taskId: number, file: File) =>
-    send<AttachmentRef>(`/tasks/${taskId}/attachments`, {
+  // kind "task" images go to the researcher with the task's brief. Chat images (the default) go with a message.
+  uploadAttachment: (taskId: number, file: File, kind: "chat" | "task" = "chat") =>
+    send<AttachmentRef>(`/tasks/${taskId}/attachments${kind === "task" ? "?kind=task" : ""}`, {
       method: "POST",
       headers: { "Content-Type": file.type, "X-File-Name": encodeURIComponent(file.name || "image") },
       body: file,

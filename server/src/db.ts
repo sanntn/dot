@@ -131,6 +131,27 @@ const MIGRATIONS: string[] = [
   ALTER TABLE projects ADD COLUMN claude_token TEXT;
   ALTER TABLE runs ADD COLUMN claude_token TEXT;
   `,
+  `
+  -- Images attached to a task when it was created ('task') reach the researcher. Chat images stay 'chat'.
+  ALTER TABLE attachments ADD COLUMN origin TEXT NOT NULL DEFAULT 'chat';
+
+  -- A task cannot start until every task it is blocked by is done.
+  CREATE TABLE task_dependencies (
+    task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    blocked_by_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, blocked_by_id)
+  );
+  CREATE INDEX task_dependencies_blocker ON task_dependencies(blocked_by_id);
+
+  CREATE TABLE task_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export type Db = DatabaseSync;

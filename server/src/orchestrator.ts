@@ -171,13 +171,16 @@ export class Orchestrator {
     if (task.column !== "inbox" && !inResearchUnstarted) {
       throw new HttpError(409, "Only tasks in the Inbox can start research");
     }
+    if (task.blockedBy.length > 0) {
+      throw new HttpError(409, `Blocked by ${task.blockedBy.map((b) => `#${b.number}`).join(", ")}. Finish those first.`);
+    }
     const project = this.store.getProject(task.projectId);
 
     if (task.column === "inbox") this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
     this.store.setNeedsInput(taskId, false);
     const run = this.store.createRun(taskId, "research", randomUUID());
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Research started." });
-    this.dispatch(run.id, [{ type: "text", text: researcherBrief(task, project) }], true);
+    this.dispatch(run.id, buildContent(researcherBrief(task, project), this.store.taskAttachments(taskId)), true);
     this.publish(taskId);
     return this.store.getTask(taskId);
   }
@@ -192,10 +195,10 @@ export class Orchestrator {
 
     this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Researcher resumed." });
-    const prompt = run.sessionStarted
-      ? "Continue the research. When you are ready, call submit_plan. If you need a decision from the user, call ask_human."
-      : researcherBrief(task, this.store.getProject(task.projectId));
-    this.dispatch(run.id, [{ type: "text", text: prompt }], true);
+    const content: ContentBlock[] = run.sessionStarted
+      ? [{ type: "text", text: "Continue the research. When you are ready, call submit_plan. If you need a decision from the user, call ask_human." }]
+      : buildContent(researcherBrief(task, this.store.getProject(task.projectId)), this.store.taskAttachments(taskId));
+    this.dispatch(run.id, content, true);
     this.publish(taskId);
     return this.store.getTask(taskId);
   }

@@ -22,6 +22,8 @@ import type {
   ProjectInputSchema,
   Task,
   TaskInputSchema,
+  TaskTemplate,
+  TemplateInputSchema,
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
@@ -89,6 +91,21 @@ function toProject(row: Row): Project {
   };
 }
 
+// Open blockers ride along as "id:number" pairs, so one query serves the whole board.
+const TASK_SELECT = `SELECT tasks.*, (
+    SELECT group_concat(b.id || ':' || b.number)
+    FROM task_dependencies d JOIN tasks b ON b.id = d.blocked_by_id
+    WHERE d.task_id = tasks.id AND b.column_key != 'done'
+  ) AS blocked_by FROM tasks`;
+
+function parseBlockers(value: unknown): Task["blockedBy"] {
+  if (typeof value !== "string" || value === "") return [];
+  return value.split(",").map((pair) => {
+    const [id, number] = pair.split(":").map(Number);
+    return { id: id!, number: number! };
+  });
+}
+
 function toTask(row: Row): Task {
   return {
     id: row.id as number,
@@ -105,8 +122,19 @@ function toTask(row: Row): Task {
     prId: row.pr_id as number | null,
     prUrl: row.pr_url as string | null,
     reviewRound: row.review_round as number,
+    blockedBy: parseBlockers(row.blocked_by),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+  };
+}
+
+function toTemplate(row: Row): TaskTemplate {
+  return {
+    id: row.id as number,
+    projectId: row.project_id as number,
+    name: row.name as string,
+    title: row.title as string,
+    description: row.description as string,
   };
 }
 
@@ -190,13 +218,13 @@ export class Store {
   listTasks(projectId: number): Task[] {
     this.getProject(projectId);
     const rows = this.db
-      .prepare("SELECT * FROM tasks WHERE project_id = ? ORDER BY column_key, position")
+      .prepare(`${TASK_SELECT} WHERE project_id = ? ORDER BY column_key, position`)
       .all(projectId) as Row[];
     return rows.map(toTask);
   }
 
   getTask(id: number): Task {
-    const row = this.db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Row | undefined;
+    const row = this.db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as Row | undefined;
     if (!row) throw notFound("Task");
     return toTask(row);
   }
@@ -218,16 +246,48 @@ export class Store {
            VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?)`,
         )
         .run(data.projectId, counter.n, data.title, data.description, (last.max ?? 0) + POSITION_STEP, stamp, stamp);
-      return Number(result.lastInsertRowid);
+      const newId = Number(result.lastInsertRowid);
+      this.setBlockers(newId, data.projectId, data.blockedBy);
+      return newId;
     });
     return this.getTask(id);
   }
 
+  // Replaces the task's blockers. They must be other tasks of the same project, and must not loop back.
+  private setBlockers(taskId: number, projectId: number, blockerIds: number[]): void {
+    const unique = [...new Set(blockerIds)];
+    const find = this.db.prepare("SELECT project_id FROM tasks WHERE id = ?");
+    for (const id of unique) {
+      if (id === taskId) throw new HttpError(400, "A task cannot block itself");
+      const row = find.get(id) as { project_id: number } | undefined;
+      if (!row || row.project_id !== projectId) throw new HttpError(400, "A blocker must be a task in the same project");
+    }
+    // Adding taskId -> blocker closes a loop when taskId can already be reached from the blocker.
+    const next = this.db.prepare("SELECT blocked_by_id AS id FROM task_dependencies WHERE task_id = ?");
+    for (const start of unique) {
+      const seen = new Set<number>();
+      const stack = [start];
+      while (stack.length > 0) {
+        const at = stack.pop()!;
+        if (at === taskId) throw new HttpError(400, "Those blockers would make the tasks wait on each other");
+        if (seen.has(at)) continue;
+        seen.add(at);
+        for (const row of next.all(at) as { id: number }[]) stack.push(row.id);
+      }
+    }
+    this.db.prepare("DELETE FROM task_dependencies WHERE task_id = ?").run(taskId);
+    const insert = this.db.prepare("INSERT INTO task_dependencies (task_id, blocked_by_id) VALUES (?, ?)");
+    for (const id of unique) insert.run(taskId, id);
+  }
+
   updateTask(id: number, patch: TaskPatchData): Task {
     const task = this.getTask(id);
-    this.db
-      .prepare("UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?")
-      .run(patch.title ?? task.title, patch.description ?? task.description, now(), id);
+    transaction(this.db, () => {
+      this.db
+        .prepare("UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE id = ?")
+        .run(patch.title ?? task.title, patch.description ?? task.description, now(), id);
+      if (patch.blockedBy) this.setBlockers(id, task.projectId, patch.blockedBy);
+    });
     return this.getTask(id);
   }
 
@@ -454,7 +514,7 @@ export class Store {
 
   listTasksInColumns(columns: Column[]): Task[] {
     const marks = columns.map(() => "?").join(", ");
-    const rows = this.db.prepare(`SELECT * FROM tasks WHERE column_key IN (${marks})`).all(...columns) as Row[];
+    const rows = this.db.prepare(`${TASK_SELECT} WHERE column_key IN (${marks})`).all(...columns) as Row[];
     return rows.map(toTask);
   }
 
@@ -487,13 +547,51 @@ export class Store {
 
   // Attachments
 
-  addAttachment(a: { taskId: number; fileName: string; mediaType: string; size: number; path: string }): Attachment {
+  addAttachment(a: {
+    taskId: number;
+    fileName: string;
+    mediaType: string;
+    size: number;
+    path: string;
+    origin?: "chat" | "task";
+  }): Attachment {
     const result = this.db
       .prepare(
-        "INSERT INTO attachments (task_id, file_name, media_type, size, path, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO attachments (task_id, file_name, media_type, size, path, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(a.taskId, a.fileName, a.mediaType, a.size, a.path, now());
+      .run(a.taskId, a.fileName, a.mediaType, a.size, a.path, a.origin ?? "chat", now());
     return this.getAttachment(Number(result.lastInsertRowid));
+  }
+
+  // Images attached when the task was created. The researcher gets them with its brief.
+  taskAttachments(taskId: number): Attachment[] {
+    const ids = this.db
+      .prepare("SELECT id FROM attachments WHERE task_id = ? AND origin = 'task' ORDER BY id")
+      .all(taskId) as { id: number }[];
+    return ids.map((r) => this.getAttachment(r.id));
+  }
+
+  // Templates
+
+  listTemplates(projectId: number): TaskTemplate[] {
+    this.getProject(projectId);
+    const rows = this.db.prepare("SELECT * FROM task_templates WHERE project_id = ? ORDER BY name").all(projectId) as Row[];
+    return rows.map(toTemplate);
+  }
+
+  addTemplate(projectId: number, input: z.output<typeof TemplateInputSchema>): TaskTemplate {
+    this.getProject(projectId);
+    const result = this.db
+      .prepare("INSERT INTO task_templates (project_id, name, title, description, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, input.name, input.title, input.description, now());
+    return toTemplate(
+      this.db.prepare("SELECT * FROM task_templates WHERE id = ?").get(Number(result.lastInsertRowid)) as Row,
+    );
+  }
+
+  deleteTemplate(id: number): void {
+    const result = this.db.prepare("DELETE FROM task_templates WHERE id = ?").run(id);
+    if (result.changes === 0) throw notFound("Template");
   }
 
   getAttachment(id: number): Attachment {
