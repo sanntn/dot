@@ -6,3 +6,6 @@ data/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Design tool cache
+web/.impeccable/hook.cache.json
