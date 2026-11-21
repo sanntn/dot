@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   COLUMN_LABELS,
   MAX_REVIEW_ROUNDS,
+  defaultTaskKind,
   kindDef,
   type TaskKind,
   stageColumn,
@@ -162,18 +163,21 @@ const TRIAGE_CONFIG: StageConfig = {
   stalled: "The triage agent stopped without proposals or a question. Reply here to tell it how to continue.",
 };
 
-// The stage's settings for a kind of task.
+// The research-stage agent of each kind: its settings and what it reads first. A new kind adds a row here.
+const RESEARCH_AGENTS: Record<TaskKind, { config: StageConfig; brief: (task: Task, project: Project, rules: string[]) => string }> = {
+  code: { config: STAGE_CONFIG.research, brief: researcherBrief },
+  report: { config: REPORT_CONFIG, brief: reporterBrief },
+  triage: { config: TRIAGE_CONFIG, brief: triagerBrief },
+};
+
+// The stage's settings for a kind of task. Kinds only change the research stage.
 function stageConfig(kind: TaskKind, stage: AgentStage): StageConfig {
-  if (stage === "research" && kind === "report") return REPORT_CONFIG;
-  if (stage === "research" && kind === "triage") return TRIAGE_CONFIG;
-  return STAGE_CONFIG[stage];
+  return stage === "research" ? (RESEARCH_AGENTS[kind] ?? RESEARCH_AGENTS.code).config : STAGE_CONFIG[stage];
 }
 
 // What a research-stage agent reads first, by kind.
 function researchBrief(task: Task, project: Project, rules: string[]): string {
-  if (task.kind === "report") return reporterBrief(task, project);
-  if (task.kind === "triage") return triagerBrief(task, project);
-  return researcherBrief(task, project, rules);
+  return (RESEARCH_AGENTS[task.kind] ?? RESEARCH_AGENTS.code).brief(task, project, rules);
 }
 
 // In-memory state for a run while Dot is up. The database holds everything that must survive a restart.
@@ -669,7 +673,7 @@ ${checksSummary(results)}` });
     }
 
     const project = this.store.getProject(task.projectId);
-    const defaultKind: TaskKind = project.kind === "workspace" ? "report" : "code";
+    const defaultKind = defaultTaskKind(project.kind);
     const decided: Record<number, ProposalDecision> = {};
     const created: [number, number][] = [];
     let failure: unknown = null;

@@ -1,4 +1,6 @@
 import {
+  defaultTaskKind,
+  kindDef,
   ExecutionReportSchema,
   MAX_REVIEW_ROUNDS,
   PlanSchema,
@@ -6,7 +8,6 @@ import {
   ReportDocSchema,
   ReviewSchema,
   type Run,
-  type TaskKind,
 } from "@dot/shared";
 import { z } from "zod";
 import { fixRequest } from "./agents/reviewer.ts";
@@ -124,18 +125,18 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
         return { text: "Triage is already finished and can no longer change.", isError: true };
       }
       // A workspace has no repository, so a proposed code change could never be created.
-      const workspace = store.getProject(task.projectId).kind === "workspace";
-      if (workspace && proposals.items.some((i) => i.taskKind === "code")) {
+      const project = store.getProject(task.projectId);
+      if (project.kind === "workspace" && proposals.items.some((i) => i.taskKind === "code")) {
         return { text: "This project is a workspace with no repository, so it cannot hold code tasks. Use report, then submit again.", isError: true };
       }
       if (!proposals.items.some((i) => i.action === "create_task")) {
         return { text: "Every item is a drop. If nothing here is actionable, say so to the user and end your turn without submitting.", isError: true };
       }
       // Settle the kind now, so the list you review shows what accepting will create.
-      const defaultKind = workspace ? "report" : "code";
+      const defaultKind = defaultTaskKind(project.kind);
       const settled = {
         ...proposals,
-        items: proposals.items.map((i) => (i.action === "create_task" && !i.taskKind ? { ...i, taskKind: defaultKind as TaskKind } : i)),
+        items: proposals.items.map((i) => (i.action === "create_task" && !i.taskKind ? { ...i, taskKind: defaultKind } : i)),
       };
       const saved = store.addProposals(run.taskId, runId, settled);
       store.addMessage({
@@ -293,8 +294,9 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
   });
 
   if (run.stage === "research") {
-    const kind = store.getTask(run.taskId).kind;
-    return [askHuman, kind === "report" ? submitReport : kind === "triage" ? submitProposals : submitPlan];
+    // The kind names the tool that ends its research stage.
+    const submit = { submit_report: submitReport, submit_proposals: submitProposals }[kindDef(store.getTask(run.taskId).kind).submitTool];
+    return [askHuman, submit ?? submitPlan];
   }
   if (run.stage === "execute") return [askHuman, submitExecutionReport];
   return [askHuman, submitReview];

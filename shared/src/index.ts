@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_KIND, kindDef, TASK_KINDS } from "./kinds.ts";
+import { DEFAULT_KIND, kindDef, PROPOSABLE_KINDS, TASK_KINDS } from "./kinds.ts";
 
 export * from "./kinds.ts";
 
@@ -427,7 +427,7 @@ export const ProposalItemSchema = z.object({
     .optional()
     .describe("For create_task: what to do and why, enough for the agent that picks it up. Leave out for drop."),
   taskKind: z
-    .enum(TASK_KINDS)
+    .enum(PROPOSABLE_KINDS)
     .optional()
     .describe("For create_task: code for a change to the repository, report for a question to research. Defaults to report in a workspace and code otherwise."),
   reason: z.string().trim().min(1).describe("Why this item is a task, or why it is dropped. One sentence."),

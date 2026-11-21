@@ -78,6 +78,14 @@ export function kindDef(kind: string): KindDef {
   return KINDS[kind as TaskKind] ?? KINDS[DEFAULT_KIND];
 }
 
+// The kind a new task gets in a project when none is given: code in a repository, report in a workspace.
+export function defaultTaskKind(projectKind: string): "code" | "report" {
+  return projectKind === "workspace" ? "report" : "code";
+}
+
+// The kinds a triage agent may propose. Triage does not propose more triage.
+export const PROPOSABLE_KINDS = ["code", "report"] as const satisfies readonly TaskKind[];
+
 // The column an agent stage works in. Outside it, the agent is only chatting.
 export function stageColumn(kind: TaskKind, stage: AgentStage): Column | null {
   return kindDef(kind).stageColumns[stage] ?? null;

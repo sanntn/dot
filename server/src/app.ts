@@ -206,16 +206,20 @@ export function createApp(
     const { cloneRepo: given, ...data } = parsed;
     if (data.kind === "workspace") {
       // No repository. The agents get an empty folder of their own to work in.
+      // Check the input first, so a refused request leaves no folder behind.
+      const claudeConfigDir = checkConfigDir(data.claudeConfigDir);
+      const claudeToken = checkTokenName(data.claudeToken);
       const slug = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "workspace";
       const folder = join(workspacesRoot, `${slug}-${randomBytes(3).toString("hex")}`);
       mkdirSync(folder, { recursive: true });
-      options.prepareAgentFolder?.(folder);
-      const workspace = store.createProject({
-        ...data,
-        repoPath: folder,
-        claudeConfigDir: checkConfigDir(data.claudeConfigDir),
-        claudeToken: checkTokenName(data.claudeToken),
-      });
+      let workspace: Project;
+      try {
+        options.prepareAgentFolder?.(folder);
+        workspace = store.createProject({ ...data, repoPath: folder, claudeConfigDir, claudeToken });
+      } catch (err) {
+        rmSync(folder, { recursive: true, force: true });
+        throw err;
+      }
       bus.publish({ type: "projects.changed" });
       return c.json(withClone(workspace), 201);
     }
@@ -603,7 +607,7 @@ export function createApp(
 
   // A report task's document. Approving finishes the task.
   app.get("/tasks/:id/doc", (c) => c.json(store.latestReportDoc(idParam(c))));
-  app.post("/tasks/:id/doc/approve", async (c) => c.json(orchestrator.approveReportDoc(idParam(c))));
+  app.post("/tasks/:id/doc/approve", async (c) => c.json(await orchestrator.approveReportDoc(idParam(c))));
   app.post("/tasks/:id/doc/send-back", async (c) => {
     const { notes } = await parseBody(c, SendBackSchema);
     return c.json(orchestrator.sendBackReportDoc(idParam(c), notes));

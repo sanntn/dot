@@ -1,14 +1,14 @@
 import { taskMarkdown } from "../src/export.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
-import { ProjectInputSchema, type Column, type Task } from "@dot/shared";
+import { ProjectInputSchema, ProposalsSchema, type Column, type Task } from "@dot/shared";
 import { createApp } from "../src/app.ts";
 import { Auth } from "../src/auth.ts";
 import { openDb } from "../src/db.ts";
@@ -131,7 +131,7 @@ async function harness(launches: Launch[], extra: Partial<ConstructorParameters<
   }
   const inColumn = (column: Column) => (t: Task) => t.column === column && t.agentState !== "running" && t.agentState !== "queued";
 
-  return { store, bus, orchestrator, app, task, repo, calls, until, inColumn };
+  return { store, bus, orchestrator, app, task, repo, workspacesDir: join(dir, "workspaces"), calls, until, inColumn };
 }
 
 test("a task goes from the inbox to merge approval through three agents", async () => {
@@ -651,6 +651,54 @@ test("a triage in a workspace cannot propose code, and its accepted tasks defaul
   h.store.moveTask(task.id, { column: "triage_review", beforeTaskId: null });
   const decided = h.orchestrator.decideProposals(task.id, { version: 1, accept: [0], reject: [] });
   assert.equal(h.store.getTask(decided.decisions[0]!.taskId!).kind, "report");
+});
+
+test("the report and triage routes answer with the task, and refuse the wrong state without crashing", async () => {
+  const h = await harness([]);
+  const call = (path: string, body?: unknown) =>
+    h.app.request(`/api${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "127.0.0.1" },
+      body: JSON.stringify(body ?? {}),
+    });
+  const projectId = h.task.projectId;
+
+  const report = h.store.createTask({ projectId, title: "R", description: "", kind: "report", blockedBy: [] });
+  assert.equal((await call(`/tasks/${report.id}/doc/approve`)).status, 409);
+  h.store.addReportDoc(report.id, null, "agent", reportDoc("Done."));
+  h.store.moveTask(report.id, { column: "report_review", beforeTaskId: null });
+  const approved = await call(`/tasks/${report.id}/doc/approve`);
+  assert.equal(approved.status, 200);
+  assert.equal(((await approved.json()) as { column: string }).column, "done");
+
+  const triage = h.store.createTask({ projectId, title: "T", description: "", kind: "triage", blockedBy: [] });
+  assert.equal((await call(`/tasks/${triage.id}/proposals/finish`)).status, 409);
+  h.store.addProposals(triage.id, null, proposals("Two."));
+  h.store.moveTask(triage.id, { column: "triage_review", beforeTaskId: null });
+  const decided = await call(`/tasks/${triage.id}/proposals/decide`, { version: 1, accept: [0], reject: [] });
+  assert.equal(decided.status, 200);
+  assert.equal(((await decided.json()) as { decisions: Record<string, { status: string }> }).decisions["0"]?.status, "accepted");
+  assert.equal((await call(`/tasks/${triage.id}/proposals/decide`, { version: 1, accept: [0], reject: [] })).status, 409);
+  const finished = await call(`/tasks/${triage.id}/proposals/finish`);
+  assert.equal(((await finished.json()) as { column: string }).column, "done");
+});
+
+test("a proposal cannot name the triage kind", async () => {
+  const bad = { action: "create_task", title: "x", taskKind: "triage", reason: "y" };
+  assert.equal(ProposalsSchema.safeParse({ headline: "h", summary: "s", items: [bad] }).success, false);
+  assert.equal(ProposalsSchema.safeParse({ headline: "h", summary: "s", items: [{ ...bad, taskKind: "report" }] }).success, true);
+});
+
+test("a refused workspace request leaves no folder behind", async () => {
+  const h = await harness([]);
+  const before = existsSync(h.workspacesDir) ? readdirSync(h.workspacesDir).length : 0;
+  const res = await h.app.request("/api/projects", {
+    method: "POST",
+    headers: { "content-type": "application/json", host: "127.0.0.1" },
+    body: JSON.stringify({ name: "Desk", kind: "workspace", claudeConfigDir: "../../escape" }),
+  });
+  assert.ok(res.status >= 400);
+  assert.equal(existsSync(h.workspacesDir) ? readdirSync(h.workspacesDir).length : 0, before);
 });
 
 test("a triage task refuses the plan and report actions", async () => {

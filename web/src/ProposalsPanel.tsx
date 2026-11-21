@@ -120,11 +120,12 @@ export function ProposalsPanel({ task, artifact, active }: { task: Task; artifac
                   {decision?.status === "rejected" && <Badge variant="outline">Rejected</Badge>}
                 </div>
                 <p className="[overflow-wrap:anywhere]">{item.reason}</p>
+                {/* Open by default: an accepted task starts from this text, and the agent wrote it after reading untrusted input. */}
                 {item.description && (
-                  <details className="text-muted-foreground">
-                    <summary className="cursor-pointer text-xs">Task description</summary>
-                    <p className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{item.description}</p>
-                  </details>
+                  <div className="grid gap-1 rounded-md bg-muted/50 p-2 text-muted-foreground">
+                    <span className="text-xs font-medium">Task description</span>
+                    <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{item.description}</p>
+                  </div>
                 )}
                 {reviewing && isTask && !decision && (
                   <div className="flex justify-end gap-2">
