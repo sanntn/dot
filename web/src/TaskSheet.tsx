@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActivityPanel } from "./ActivityPanel.tsx";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -218,14 +218,14 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   const showReviewTab = isCode && (review !== null || task.column === "review" || task.column === "merge_approval");
 
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent
-        className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent
+        className="flex h-[90vh] w-full flex-col gap-0 p-0 sm:max-w-[1400px]"
         onCloseAutoFocus={onClose}
       >
-        <SheetHeader className="gap-2 border-b pr-12">
-          <SheetTitle className="text-base">{task.title}</SheetTitle>
-          <SheetDescription asChild>
+        <DialogHeader className="gap-2 border-b p-4 pr-12">
+          <DialogTitle className="text-base">{task.title}</DialogTitle>
+          <DialogDescription asChild>
             <div className="flex flex-wrap items-center gap-2">
               <span className="tabular-nums">#{task.number}</span>
               <Badge variant="outline">{COLUMN_LABELS[task.column]}</Badge>
@@ -248,7 +248,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                 </a>
               )}
             </div>
-          </SheetDescription>
+          </DialogDescription>
           <div className="flex flex-wrap gap-2 pt-1">
             {startLabel && (
               <Button size="sm" onClick={() => void act(() => api.startTask(task.id))}>
@@ -359,7 +359,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               </AlertDescription>
             </Alert>
           )}
-        </SheetHeader>
+        </DialogHeader>
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-4 mt-3">
@@ -432,8 +432,8 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
             <TaskDetails task={task} tasks={tasks} onDeleted={() => setOpen(false)} />
           </TabsContent>
         </Tabs>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 
