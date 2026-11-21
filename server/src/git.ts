@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -262,6 +262,17 @@ export async function prepareWorktree(options: {
     );
   }
   return { branch, path, notes };
+}
+
+// Keeps one file out of git status in every worktree of the repository, through .git/info/exclude. The
+// preview page is for screenshots only, so it must not count as an uncommitted change or reach a commit.
+export async function excludeFromGit(worktree: string, file: string): Promise<void> {
+  const exclude = resolve(worktree, (await git(worktree, ["rev-parse", "--git-path", "info/exclude"])).trim());
+  const line = `/${file.replace(/\\/g, "/").replace(/^\.\//, "")}`;
+  const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+  if (current.split(/\r?\n/).includes(line)) return;
+  mkdirSync(dirname(exclude), { recursive: true });
+  appendFileSync(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`);
 }
 
 // Removes the worktree folder. The branch stays, so no committed work is lost.

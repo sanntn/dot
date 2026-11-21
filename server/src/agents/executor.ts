@@ -99,7 +99,7 @@ export function previewNote(project: Project): string[] {
     `Preview page: ${project.previewPath}`,
     `If your change affects how something looks, write a plain static page at ${project.previewPath} that shows it, so a screenshot can be taken for review.`,
     `Link the built CSS and JavaScript${project.previewBuild ? ` (the build command ${project.previewBuild} runs first)` : ""} and write the markup of the changed parts by hand with realistic sample content.`,
-    "Do not commit this page. Leave it out of git add.",
+    "Dot keeps this page out of git, so it will not show as an uncommitted change. Do not force-add it.",
   ];
 }
 

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_MEMORY_NOTES, MAX_PENDING_MEMORY, planSubtaskProblem, type Plan } from "@dot/shared";
 import { openDb } from "../src/db.ts";
+import { excludeFromGit } from "../src/git.ts";
 import { findBrowser, previewMode, previewUrl, serveFolder } from "../src/preview.ts";
 import { Store } from "../src/store.ts";
 
@@ -121,4 +123,25 @@ test("project memory holds a limited number of distinct notes", () => {
   store.deleteMemory(first.id);
   assert.equal(store.listMemory(project.id).length, MAX_MEMORY_NOTES - 1);
   assert.deepEqual(store.memoryNotes(project.id).slice(0, 2), ["Note 1", "Note 2"]);
+});
+
+test("the preview page stays out of git status in a worktree", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dot-exclude-"));
+  const repo = join(dir, "repo");
+  const tree = join(dir, "tree");
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" });
+  mkdirSync(repo);
+  run(repo, "init", "-q", "-b", "main");
+  writeFileSync(join(repo, "a.txt"), "a");
+  run(repo, "add", ".");
+  run(repo, "commit", "-q", "-m", "init");
+  run(repo, "worktree", "add", "-q", "-b", "task", tree);
+  mkdirSync(join(tree, ".dot-preview"));
+  writeFileSync(join(tree, ".dot-preview", "index.html"), "<p>x</p>");
+  assert.match(run(tree, "status", "--porcelain"), /\.dot-preview/);
+  await excludeFromGit(tree, ".dot-preview/index.html");
+  await excludeFromGit(tree, ".dot-preview/index.html");
+  assert.equal(run(tree, "status", "--porcelain").trim(), "");
+  assert.equal(readFileSync(join(repo, ".git", "info", "exclude"), "utf8").split("/.dot-preview/index.html").length, 2);
 });

@@ -7,6 +7,7 @@ import {
   defaultTaskKind,
   kindDef,
   planSubtaskProblem,
+  previewPathProblem,
   type TaskKind,
   stageColumn,
   stageLabel,
@@ -67,6 +68,7 @@ import type { EventBus } from "./events.ts";
 import { trustedOrigin } from "./githost.ts";
 import {
   branchSlug,
+  excludeFromGit,
   fetchBase,
   resolveBaseRef,
   gitError,
@@ -1246,6 +1248,13 @@ ${err instanceof Error ? err.message : String(err)}` });
       allowedTools: [...RESEARCHER_ALLOWED_TOOLS.filter((t) => !t.startsWith("mcp__")), "mcp__dot__ask_human"],
       deniedTools: RESEARCHER_DENIED_TOOLS,
     };
+    // At Merge approval the executor may write the project's preview page, and nothing else, so a branch
+    // that was built without one can still get a preview. Dot keeps the page out of git.
+    const previewPage = run.stage === "execute" && task.column === "merge_approval" && !project.devCommand ? project.previewPath : null;
+    if (previewPage && !previewPathProblem(previewPage)) {
+      readOnly.tools = [...RESEARCHER_TOOLS, "Write", "Edit"];
+      readOnly.allowedTools = [...readOnly.allowedTools, `Write(${previewPage})`, `Edit(${previewPage})`];
+    }
     const stage: StageConfig =
       run.stage === "research"
         ? stageConfig(task.kind, "research")
@@ -1258,6 +1267,9 @@ ${err instanceof Error ? err.message : String(err)}` });
     // The executor and reviewer both work in the task's worktree.
     const cwd = run.stage === "research" ? project.repoPath : task.worktreePath;
     if (!cwd) throw new Error("This task has no worktree");
+    if (run.stage !== "research" && project.previewPath && !previewPathProblem(project.previewPath)) {
+      void excludeFromGit(cwd, project.previewPath).catch(() => undefined);
+    }
 
     if (live.token) this.tokens.delete(live.token);
     live.token = randomBytes(24).toString("hex");
