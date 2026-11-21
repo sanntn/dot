@@ -1,5 +1,5 @@
 import type { Plan, Project, Task } from "@dot/shared";
-import { rulesNote } from "./rules.ts";
+import { memoryNote, rulesNote } from "./rules.ts";
 
 export const EXECUTOR_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
 
@@ -16,6 +16,7 @@ export const EXECUTOR_ALLOWED_TOOLS = [
   "WebSearch",
   "WebFetch",
   "mcp__dot__ask_human",
+  "mcp__dot__remember",
   "mcp__dot__submit_execution_report",
 ];
 
@@ -68,6 +69,9 @@ How to work:
 - When the work is done, commit everything, then call submit_execution_report. It is rejected while there are
   uncommitted changes or when the branch has no commits. Give the report a headline: one plain sentence on what
   you built and whether anything needs the user. The board shows it first.
+- When you learn something that every later task in this project would want to know and that is hard to see from
+  the code (how to run something, a trap you hit), suggest it with remember. One short fact per call. Skip anything
+  specific to this task.
 - After the report is accepted, end your turn with a short summary.
 
 The user may chat with you while you work or afterwards. Answer their questions and act on their instructions.
@@ -87,7 +91,7 @@ export function planMarkdown(plan: Plan): string {
   ].join("\n\n");
 }
 
-export function executorBrief(task: Task, project: Project, plan: Plan, planVersion: number, branch: string, rules: string[] = []): string {
+export function executorBrief(task: Task, project: Project, plan: Plan, planVersion: number, branch: string, rules: string[] = [], memory: string[] = []): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
     project.lintCommand && `lint: ${project.lintCommand}`,
@@ -104,6 +108,7 @@ export function executorBrief(task: Task, project: Project, plan: Plan, planVers
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
     rulesNote(rules),
+    memoryNote(memory),
     `# Approved plan (version ${planVersion})`,
     "",
     planMarkdown(plan),

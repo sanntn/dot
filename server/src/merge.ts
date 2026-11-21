@@ -137,7 +137,7 @@ export class MergeStep {
       if (!pr) {
         pr = await remote.createPullRequest({
           title: task.title,
-          description: this.pullRequestDescription(taskId),
+          description: this.pullRequestDescription(taskId, remote),
           source: branch,
           destination: base,
         });
@@ -299,7 +299,7 @@ export class MergeStep {
     this.hooks.publish(taskId);
   }
 
-  private pullRequestDescription(taskId: number): string {
+  private pullRequestDescription(taskId: number, remote: RepoHostClient): string {
     const task = this.store.getTask(taskId);
     const plan = this.store.latestPlan(taskId)?.plan;
     const reports = this.store.listExecutionReports(taskId);
@@ -310,8 +310,15 @@ export class MergeStep {
     const changed = first
       ? [first.report.summary, ...later.map((r) => `Fix round: ${r.report.summary}`)].join("\n\n")
       : undefined;
+    // GitHub closes the issue when the pull request merges. Only for an issue of this same repository.
+    const issue = task.sourceRef?.match(/^github:(.+)\/(.+)#(\d+)$/);
+    const closes =
+      remote.host === "github" && issue && issue[1] === remote.owner && issue[2] === remote.name ? `Closes #${issue[3]}` : "";
+    // An imported issue's own text stays out of the pull request: it is someone else's words, and a
+    // "Closes #n" in it would close an issue this task never touched.
     return [
-      task.description.trim(),
+      task.sourceRef ? `Imported from ${task.sourceUrl ?? task.sourceRef}` : task.description.trim(),
+      closes,
       section("Goal", plan?.goal),
       section("Acceptance criteria", plan?.acceptanceCriteria.map((c) => `- ${c}`).join("\n")),
       section("What changed", changed),

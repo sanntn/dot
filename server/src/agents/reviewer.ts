@@ -1,5 +1,5 @@
 import type { ExecutionArtifact, Plan, Project, ReviewIssue, Task } from "@dot/shared";
-import { rulesNote } from "./rules.ts";
+import { memoryNote, rulesNote } from "./rules.ts";
 import { checksSummary, type CheckResult } from "../checks.ts";
 import { planMarkdown } from "./executor.ts";
 import { RESEARCHER_ALLOWED_TOOLS, RESEARCHER_DENIED_TOOLS } from "./researcher.ts";
@@ -17,6 +17,7 @@ export function reviewerAllowedTools(project: Project): string[] {
     ...RESEARCHER_ALLOWED_TOOLS.filter((t) => !t.startsWith("mcp__") && !t.startsWith("Web")),
     ...commands.map((cmd) => `Bash(${cmd})`),
     "mcp__dot__ask_human",
+    "mcp__dot__remember",
     "mcp__dot__submit_review",
   ];
 }
@@ -77,6 +78,7 @@ export function reviewerBrief(
   baseRef: string,
   checks?: CheckResult[],
   rules: string[] = [],
+  memory: string[] = [],
 ): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
@@ -96,6 +98,7 @@ export function reviewerBrief(
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
     rulesNote(rules),
+    memoryNote(memory),
     `# Approved plan (version ${planVersion})`,
     "",
     planMarkdown(plan),

@@ -29,13 +29,13 @@ export function checkCommands(project: Project): { name: CheckResult["name"]; co
   return all.flatMap((c) => (c.command ? [{ name: c.name, command: c.command }] : []));
 }
 
-function plainEnv(): NodeJS.ProcessEnv {
+export function plainEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|ANTHROPIC_|DOT_)/.test(key)));
 }
 
 // Kills the command and everything it started. Killing only the shell would leave the real command
 // running with the output pipes open.
-function killTree(child: ChildProcess): void {
+export function killTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   try {
     if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });

@@ -357,6 +357,32 @@ export const MIGRATIONS: string[] = [
   -- The schedule that made a task, so the Feed can show and filter what recurring jobs produced.
   ALTER TABLE tasks ADD COLUMN schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL;
   `,
+  `
+  -- Short notes the project's agents saved for later tasks: build commands, where things live, gotchas.
+  -- Unlike rules, agents write these without asking. You can edit or delete any of them.
+  CREATE TABLE project_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX project_memory_project ON project_memory(project_id);
+
+  -- Where a task came from outside Dot, such as a GitHub issue. source_ref is "github:<owner>/<repo>#<number>",
+  -- so importing the same issue twice finds the task it already made.
+  ALTER TABLE tasks ADD COLUMN source_ref TEXT;
+  ALTER TABLE tasks ADD COLUMN source_url TEXT;
+  CREATE UNIQUE INDEX tasks_source ON tasks(project_id, source_ref) WHERE source_ref IS NOT NULL;
+  `,
+  `
+  -- A note an agent saves waits as 'suggested' until the user accepts it. Only 'active' notes reach agents.
+  ALTER TABLE project_memory ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+  `,
+  `
+  -- The Favro board a project imports cards from: a link copied from Favro, or a board ID.
+  ALTER TABLE projects ADD COLUMN favro_board TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;

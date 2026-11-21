@@ -85,6 +85,8 @@ const projectFields = z.object({
   browserTesting: z.boolean(),
   devCommand: optionalText,
   devUrl: optionalText,
+  // The Favro board to import cards from: a link copied from Favro, or a board ID.
+  favroBoard: optionalText,
   // A CLAUDE_CONFIG_DIR for this project's agents, to use a different Claude login. Null uses the default.
   claudeConfigDir: optionalText,
   // The name of a token the server holds as DOT_CLAUDE_TOKEN_<NAME>. Null uses the default login.
@@ -135,6 +137,7 @@ export const ProjectSchema = z.object({
   browserTesting: z.boolean(),
   devCommand: z.string().nullable(),
   devUrl: z.string().nullable(),
+  favroBoard: z.string().nullable(),
   claudeConfigDir: z.string().nullable(),
   claudeToken: z.string().nullable(),
   taskBudgetUsd: z.number().nullable(),
@@ -226,6 +229,9 @@ export const TaskSchema = z.object({
   blockedBy: z.array(z.object({ id: z.number().int(), number: z.number().int() })),
   // Start the research by itself once every blocker is done.
   autoStart: z.boolean(),
+  // Where the task came from outside Dot, such as a GitHub issue. Null for tasks made here.
+  sourceRef: z.string().nullable(),
+  sourceUrl: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -340,6 +346,47 @@ export type ProjectRule = {
   createdAt: string;
 };
 
+export const MAX_BATCH_IMPORT = 25;
+
+// An open issue on the project's host, offered for import as a task.
+export type ExternalIssue = {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  labels: string[];
+  author: string | null;
+  // The task already made from it, when it was imported before.
+  taskId?: number | null;
+};
+export const IssueImportSchema = z.object({
+  numbers: z.array(z.number().int().positive()).min(1, "Pick at least one issue").max(MAX_BATCH_IMPORT),
+  // Start each new task's research right away.
+  start: z.boolean().default(false),
+});
+export type IssueImport = z.input<typeof IssueImportSchema>;
+
+// A note an agent suggests for later tasks in the project. It reaches agents only after you accept it.
+export const MAX_MEMORY_NOTES = 40;
+// Suggestions waiting for you. Agents cannot add more until you accept or dismiss some.
+export const MAX_PENDING_MEMORY = 10;
+export const MemoryInputSchema = z.object({ text: z.string().trim().min(1, "Write the note").max(300) });
+export const MemoryPatchSchema = z
+  .object({ status: z.literal("active"), text: z.string().trim().min(1).max(300) })
+  .partial()
+  .refine((p) => p.status !== undefined || p.text !== undefined, { message: "Nothing to change" });
+export type MemoryStatus = "suggested" | "active";
+export type ProjectMemory = {
+  id: number;
+  projectId: number;
+  text: string;
+  // An agent's note stays a suggestion, and out of every brief, until you accept it. Notes you write are active.
+  status: MemoryStatus;
+  // The task whose agent saved it. Null for a note you wrote.
+  sourceTaskId: number | null;
+  createdAt: string;
+};
+
 // Move a task into a column, before another task in that column.
 // beforeTaskId null puts it at the end.
 export const TaskMoveSchema = z.object({
@@ -375,8 +422,42 @@ export const PlanSchema = z.object({
   assumptions: z
     .array(z.string().trim().min(1))
     .describe("Decisions you made without asking. The user reviews these."),
+  subtasks: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(200),
+        steps: z.array(z.number().int().min(0)).min(1).describe("Positions in steps, counting from 0."),
+        dependsOn: z
+          .array(z.number().int().min(0))
+          .default([])
+          .describe("Positions of earlier subtasks that must be merged first. Empty when this one stands alone."),
+      }),
+    )
+    .max(8)
+    .optional()
+    .describe(
+      "Only when the work is really two or more separate changes that each make sense as their own pull request. Every step belongs to exactly one subtask. Leave it out for work that fits one change.",
+    ),
 });
 export type Plan = z.infer<typeof PlanSchema>;
+
+// Why a plan's suggested subtasks cannot be applied, or null when they can (or there are none).
+export function planSubtaskProblem(plan: Plan): string | null {
+  const subtasks = plan.subtasks;
+  if (!subtasks || subtasks.length === 0) return null;
+  if (subtasks.length < 2) return "A split needs at least two tasks";
+  const owner = new Map<number, number>();
+  for (const [i, sub] of subtasks.entries()) {
+    for (const step of sub.steps) {
+      if (step >= plan.steps.length) return `Task ${i + 1} names step ${step + 1}, which the plan does not have`;
+      if (owner.has(step)) return `Step ${step + 1} is in two tasks`;
+      owner.set(step, i);
+    }
+    if (sub.dependsOn.some((d) => d >= i)) return `Task ${i + 1} can only depend on an earlier task`;
+  }
+  const loose = plan.steps.findIndex((_, i) => !owner.has(i));
+  return loose === -1 ? null : `Step ${loose + 1} is in no task`;
+}
 
 export type PlanArtifact = {
   version: number;

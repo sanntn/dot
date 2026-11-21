@@ -1,5 +1,5 @@
 import type { Project, Task } from "@dot/shared";
-import { rulesNote } from "./rules.ts";
+import { importedNote, memoryNote, rulesNote } from "./rules.ts";
 
 // Built-in tools the researcher has at all. Write, Edit and the rest are not even loaded.
 export const RESEARCHER_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
@@ -21,6 +21,7 @@ export const RESEARCHER_ALLOWED_TOOLS = [
   ...READ_ONLY_COMMANDS.flatMap((cmd) => [`Bash(${cmd})`, `Bash(${cmd} *)`]),
   ...EXACT_COMMANDS.map((cmd) => `Bash(${cmd})`),
   "mcp__dot__ask_human",
+  "mcp__dot__remember",
   "mcp__dot__submit_plan",
 ];
 
@@ -49,16 +50,24 @@ How to work:
   call ask_human. Ask one focused question at a time and offer choices when you can.
   Then end your turn. The answer arrives as the next user message.
 - Do not ask about things you can find out from the repository.
+- When you learn something about the project that every later task would want to know and that is hard to see from the code
+  (the real build or test command, where something lives, a trap you hit), suggest it with remember. One short fact per call.
+  Skip anything obvious, anything specific to this task, and anything already in Project memory.
 - When you know enough, call submit_plan. Acceptance criteria must be concrete and checkable.
   List every decision you made without asking under assumptions, so the user can review them.
   Give the plan a headline: one plain sentence saying what it does and the one thing to check. The board shows it first.
+- When the work is really two or more separate changes, each of which makes sense as its own pull request
+  (a backend change and the screen that uses it, or a refactor and the feature on top), fill in subtasks.
+  Each subtask has a title and the positions of its steps, counting from 0. Every step belongs to exactly one subtask.
+  Set dependsOn to the positions of earlier subtasks that must be merged first. Leave it empty for ones that stand
+  alone, since those run side by side. Leave subtasks out for work that fits one change. Do not split to look thorough.
 - After submit_plan succeeds, end your turn with a short summary of the plan.
 
 The user may chat with you later, including after the plan is approved. Answer their questions.
 If they ask for changes while the plan is still under review, submit a revised plan with submit_plan.
 `.trim();
 
-export function researcherBrief(task: Task, project: Project, rules: string[] = []): string {
+export function researcherBrief(task: Task, project: Project, rules: string[] = [], memory: string[] = []): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
     project.lintCommand && `lint: ${project.lintCommand}`,
@@ -74,7 +83,9 @@ export function researcherBrief(task: Task, project: Project, rules: string[] = 
     `Repository: ${project.repoPath} (base branch ${project.baseBranch})`,
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
     "",
+    importedNote(task),
     rulesNote(rules),
+    memoryNote(memory),
     "Research this task and submit a plan with submit_plan. Use ask_human if something is unclear.",
   ].join("\n");
 }

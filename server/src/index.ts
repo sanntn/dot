@@ -107,6 +107,7 @@ const orchestrator = new Orchestrator(store, bus, {
   stuckAfterMs: Math.max(0, Number(process.env.DOT_STUCK_MINUTES ?? 20)) * 60_000,
   // Outside any repo, so worktrees never show up as untracked files in your checkout.
   worktreesDir,
+  attachmentsDir: resolve(dataDir, "attachments"),
   guardRules: guardRules(guard),
 });
 orchestrator.recover();

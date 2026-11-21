@@ -3,6 +3,7 @@
 //   DOT_GITHUB_TOKEN  fine-grained or classic personal access token (Bearer)
 //   DOT_GITHUB_API    API base URL, for GitHub Enterprise or testing against a fake server
 
+import type { ExternalIssue } from "@dot/shared";
 import type { BuildStatus, PullRequest } from "./bitbucket.ts";
 
 export class GitHubError extends Error {
@@ -21,6 +22,27 @@ const toPullRequest = (pr: RawPullRequest): PullRequest => ({
   id: pr.number,
   state: pr.merged_at ? "MERGED" : pr.state === "open" ? "OPEN" : "DECLINED",
   url: pr.html_url ?? "",
+});
+
+type RawIssue = {
+  number: number;
+  title: string;
+  body: string | null;
+  html_url: string;
+  pull_request?: unknown;
+  labels: (string | { name?: string })[];
+  user?: { login?: string } | null;
+};
+
+const MAX_ISSUE_PAGES = 5;
+
+const toIssue = (i: RawIssue): ExternalIssue => ({
+  number: i.number,
+  title: i.title,
+  body: i.body ?? "",
+  url: i.html_url,
+  labels: i.labels.map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean),
+  author: i.user?.login ?? null,
 });
 
 type CheckRun = {
@@ -93,6 +115,30 @@ export class GitHub {
       .map((r) => ({ fullName: r.full_name, defaultBranch: r.default_branch, private: r.private }));
   }
 
+  // Open issues, newest first, without pull requests (GitHub's issue list includes them). Needs Issues read access.
+  async listIssues(owner: string, name: string, options: { label?: string } = {}): Promise<ExternalIssue[]> {
+    const labels = options.label ? `&labels=${encodeURIComponent(options.label)}` : "";
+    // Pull requests count toward GitHub's page size, so read a few pages and keep going until one comes back short.
+    const issues: ExternalIssue[] = [];
+    for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
+      const raw = await this.request<RawIssue[]>(`${this.repo(owner, name)}/issues?state=open&per_page=100&page=${page}&sort=created${labels}`);
+      issues.push(...raw.filter((i) => !i.pull_request).map(toIssue));
+      if (raw.length < 100) break;
+    }
+    return issues;
+  }
+
+  // One open issue, or null when the number is a pull request, closed or missing.
+  async getIssue(owner: string, name: string, number: number): Promise<ExternalIssue | null> {
+    try {
+      const raw = await this.request<RawIssue & { state?: string }>(`${this.repo(owner, name)}/issues/${number}`);
+      return raw.pull_request || raw.state === "closed" ? null : toIssue(raw);
+    } catch (err) {
+      if (err instanceof GitHubError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
   async getRepo(owner: string, name: string): Promise<{ defaultBranch: string }> {
     const repo = await this.request<{ default_branch: string }>(`/repos/${owner}/${name}`);
     return { defaultBranch: repo.default_branch };
@@ -120,7 +166,7 @@ export class GitHub {
         .replace(/\.+$/, "");
       const hint =
         res.status === 401 || res.status === 403 || res.status === 404
-          ? " Check DOT_GITHUB_TOKEN and that it can reach this repository with Contents, Pull requests, Checks and Commit statuses access."
+          ? " Check DOT_GITHUB_TOKEN and that it can reach this repository with Contents, Pull requests, Checks, Commit statuses and Issues access."
           : "";
       throw new GitHubError(res.status, `GitHub ${res.status}${detail ? `: ${detail}` : ""}.${hint}`);
     }

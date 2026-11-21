@@ -1,7 +1,7 @@
 // Picks the pull request host for a project: Bitbucket or GitHub, read from the origin remote
 // unless the project settings say otherwise. The merge step talks to both through RepoHostClient.
 
-import { REPO_HOST_LABELS, type Project, type RemoteInfo, type RepoHost } from "@dot/shared";
+import { REPO_HOST_LABELS, type ExternalIssue, type Project, type RemoteInfo, type RepoHost } from "@dot/shared";
 import { Bitbucket, type BuildStatus, type PullRequest } from "./bitbucket.ts";
 import { HttpError } from "./errors.ts";
 import { GitHub } from "./github.ts";
@@ -53,6 +53,9 @@ export interface RepoHostClient {
   readonly ciName: string;
   readonly owner: string;
   readonly name: string;
+  // Open issues to import as tasks. Only GitHub has this so far.
+  listIssues?(options: { label?: string }): Promise<ExternalIssue[]>;
+  getIssue?(number: number): Promise<ExternalIssue | null>;
   findOpenPullRequest(branch: string): Promise<PullRequest | null>;
   createPullRequest(input: { title: string; description: string; source: string; destination: string }): Promise<PullRequest>;
   getPullRequest(id: number): Promise<PullRequest>;
@@ -91,6 +94,8 @@ function githubClient(api: GitHub, owner: string, name: string): RepoHostClient 
     ciName: "GitHub Actions",
     owner,
     name,
+    listIssues: (options) => api.listIssues(owner, name, options),
+    getIssue: (number) => api.getIssue(owner, name, number),
     findOpenPullRequest: (branch) => api.findOpenPullRequest(owner, name, branch),
     createPullRequest: (input) => api.createPullRequest(owner, name, input),
     getPullRequest: (id) => api.getPullRequest(owner, name, id),

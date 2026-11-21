@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 // secret mounts work the same way: Docker and Coolify put them in /run/secrets/<name>.
 
 // The settings that hold a secret: passwords, signing keys and tokens. Other settings are read as they are.
-const SECRET = /^DOT_(PASSWORD|SESSION_SECRET|BITBUCKET_TOKEN|GITHUB_TOKEN|CLAUDE_TOKEN(_[A-Z0-9_]+)?)$/;
+const SECRET = /^DOT_(PASSWORD|SESSION_SECRET|BITBUCKET_TOKEN|GITHUB_TOKEN|FAVRO_TOKEN|CLAUDE_TOKEN(_[A-Z0-9_]+)?)$/;
 
 export const isSecretName = (name: string): boolean => SECRET.test(name);
 

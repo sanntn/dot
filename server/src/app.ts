@@ -28,6 +28,12 @@ import {
   SendMessageSchema,
   TaskBatchSchema,
   TaskInputSchema,
+  IssueImportSchema,
+  defaultTaskKind,
+  type ExternalIssue,
+  type Task,
+  MemoryInputSchema,
+  MemoryPatchSchema,
   RuleInputSchema,
   RulePatchSchema,
   ScheduleInputSchema,
@@ -45,8 +51,9 @@ import type { Auth } from "./auth.ts";
 import type { Scheduler } from "./scheduler.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } from "./git.ts";
-import { GitHub } from "./github.ts";
-import { detectRemote, parseRemoteUrl } from "./githost.ts";
+import { Favro, FavroError } from "./favro.ts";
+import { GitHub, GitHubError } from "./github.ts";
+import { detectRemote, parseRemoteUrl, repoHostFor } from "./githost.ts";
 import type { Orchestrator } from "./orchestrator.ts";
 import { taskMarkdown } from "./export.ts";
 import { cleanStorage, storageReport, type StoragePaths } from "./storage.ts";
@@ -173,6 +180,10 @@ export function createApp(
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+    // A host or Favro answered with an error. Say what it said, as a gateway error, and not as Dot's own failure.
+    if (err instanceof FavroError || err instanceof GitHubError) {
+      return c.json({ error: err.message }, err.status === 400 ? 400 : err.status >= 500 || err.status === 401 || err.status === 403 ? 502 : 409);
+    }
     console.error(err);
     return c.json({ error: "Internal server error" }, 500);
   });
@@ -482,6 +493,128 @@ export function createApp(
     return c.body(null, 204);
   });
 
+  // Notes the project's agents saved. You can add, edit and delete them.
+  app.get("/projects/:id/memory", (c) => c.json(store.listMemory(idParam(c))));
+  app.post("/projects/:id/memory", async (c) => {
+    const { text } = await parseBody(c, MemoryInputSchema);
+    const note = store.addMemory(idParam(c), text);
+    if (!note) throw new HttpError(409, "The project already has this note.");
+    return c.json(note, 201);
+  });
+  app.patch("/memory/:id", async (c) => c.json(store.updateMemory(idParam(c), await parseBody(c, MemoryPatchSchema))));
+  app.delete("/memory/:id", (c) => {
+    store.deleteMemory(idParam(c));
+    return c.body(null, 204);
+  });
+
+  // Open issues on the project's host, to import as tasks. Each says which task it already made, if any.
+  app.get("/projects/:id/issues", async (c) => {
+    const project = store.getProject(idParam(c));
+    const remote = await repoHostFor(project);
+    if (!remote.listIssues) throw new HttpError(409, `Importing issues works with GitHub projects only. This one is on ${remote.label}.`);
+    const label = c.req.query("label")?.trim() || undefined;
+    const issues = await remote.listIssues({ label });
+    return c.json(
+      issues.map((i) => ({ ...i, taskId: store.findTaskBySource(project.id, `github:${remote.owner}/${remote.name}#${i.number}`)?.id ?? null })),
+    );
+  });
+  // Makes a task from each picked issue. The text is read again from GitHub, never taken from the request.
+  app.post("/projects/:id/issues/import", async (c) => {
+    const input = await parseBody(c, IssueImportSchema);
+    const project = store.getProject(idParam(c));
+    if (project.kind !== "repo") throw new HttpError(409, "Only a project with a repository can import issues");
+    const remote = await repoHostFor(project);
+    if (!remote.getIssue) throw new HttpError(409, `Importing issues works with GitHub projects only. This one is on ${remote.label}.`);
+    const getIssue = remote.getIssue;
+    return c.json(
+      await importItems(project, input, {
+        what: "GitHub issue",
+        refFor: (n) => `github:${remote.owner}/${remote.name}#${n}`,
+        // Each issue is read by number, so one outside the newest page or the label filter still imports.
+        fetchOne: (n) => getIssue(n),
+        kind: "code",
+      }),
+      201,
+    );
+  });
+
+  // Cards on the project's Favro board, to import as tasks. `column` limits them to one column by name.
+  app.get("/projects/:id/favro/cards", async (c) => {
+    const project = store.getProject(idParam(c));
+    const { favro, board } = favroFor(project);
+    const { cards, truncated } = await favro.listCards(board, c.req.query("column")?.trim() || undefined);
+    const prefix = await favro.refPrefix();
+    return c.json({
+      cards: cards.map((card) => ({ ...card, taskId: store.findTaskBySource(project.id, `${prefix}${card.number}`)?.id ?? null })),
+      truncated,
+    });
+  });
+  app.post("/projects/:id/favro/import", async (c) => {
+    const input = await parseBody(c, IssueImportSchema);
+    const project = store.getProject(idParam(c));
+    const { favro } = favroFor(project);
+    const prefix = await favro.refPrefix();
+    return c.json(
+      await importItems(project, input, {
+        what: "Favro card",
+        refFor: (n) => `${prefix}${n}`,
+        fetchOne: (n) => favro.getCard(n),
+        kind: defaultTaskKind(project.kind),
+      }),
+      201,
+    );
+  });
+
+  // The Favro client and board for a project, or a 409 that says what to set.
+  function favroFor(project: Project) {
+    const board = project.favroBoard?.trim();
+    if (!board) throw new HttpError(409, "Set the Favro board in the project settings first.");
+    const favro = Favro.fromEnv();
+    if (!favro) throw new HttpError(409, "Set DOT_FAVRO_EMAIL and DOT_FAVRO_TOKEN in Dot's .env file first. Then restart Dot.");
+    return { favro, board };
+  }
+
+  // Makes a task from each picked number, reading the item again from its source and never from the request.
+  // Numbers that made no task come back with the reason, so the dialog can say so.
+  async function importItems(
+    project: Project,
+    input: { numbers: number[]; start: boolean },
+    source: { what: string; refFor: (n: number) => string; fetchOne: (n: number) => Promise<ExternalIssue | null>; kind: TaskKind },
+  ) {
+    const made: Task[] = [];
+    const skipped: { number: number; reason: string }[] = [];
+    for (const number of new Set(input.numbers)) {
+      const ref = source.refFor(number);
+      if (store.findTaskBySource(project.id, ref)) {
+        skipped.push({ number, reason: "already a task" });
+        continue;
+      }
+      const item = await source.fetchOne(number);
+      if (!item) {
+        skipped.push({ number, reason: "not found or not open" });
+        continue;
+      }
+      const description = [`Imported from ${source.what} #${number}${item.url ? ` (${item.url})` : ""}.`, item.body.trim()]
+        .filter(Boolean)
+        .join("\n\n")
+        .slice(0, 20000);
+      made.push(
+        store.createTask({ projectId: project.id, title: item.title.slice(0, 200), description, kind: source.kind, blockedBy: [] }, null, { ref, url: item.url || null }),
+      );
+    }
+    bus.publish({ type: "tasks.changed", projectId: project.id });
+    if (input.start) {
+      for (const task of made) {
+        try {
+          orchestrator.startResearch(task.id);
+        } catch (err) {
+          skipped.push({ number: Number(task.sourceRef?.match(/#(\d+)$/)?.[1] ?? 0), reason: `made, but research did not start: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+    }
+    return { tasks: made, skipped };
+  }
+
   app.get("/projects/:id/templates", (c) => c.json(store.listTemplates(idParam(c))));
   app.post("/projects/:id/templates", async (c) =>
     c.json(store.addTemplate(idParam(c), await parseBody(c, TemplateInputSchema)), 201),
@@ -644,6 +777,9 @@ export function createApp(
     return c.json(orchestrator.savePlan(idParam(c), plan));
   });
 
+  // Takes a picture of the task's running dev server. It finishes in the background and posts in the chat.
+  app.post("/tasks/:id/preview", (c) => c.json(orchestrator.startPreview(idParam(c)), 202));
+  app.post("/tasks/:id/plan/split-all", (c) => c.json(orchestrator.splitIntoSubtasks(idParam(c)), 201));
   app.post("/tasks/:id/plan/split", async (c) => {
     const input = await parseBody(c, PlanSplitSchema);
     return c.json(orchestrator.splitPlan(idParam(c), input), 201);

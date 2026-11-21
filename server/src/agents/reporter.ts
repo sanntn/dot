@@ -1,4 +1,5 @@
 import type { Project, Task } from "@dot/shared";
+import { importedNote } from "./rules.ts";
 import { RESEARCHER_ALLOWED_TOOLS, RESEARCHER_DENIED_TOOLS, RESEARCHER_TOOLS, SHELL_COMMANDS_TEXT } from "./researcher.ts";
 
 // The reporter reads and searches like the researcher and cannot change anything. Only its submit tool differs.
@@ -40,6 +41,7 @@ export function reporterBrief(task: Task, project: Project): string {
       ? `Working folder: ${project.repoPath} (an empty scratch folder, not a repository)`
       : `Working folder: ${project.repoPath}`,
     "",
+    importedNote(task),
     "Research this and submit a report with submit_report. Use ask_human if something is unclear.",
   ].join("\n");
 }

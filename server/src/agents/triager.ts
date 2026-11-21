@@ -1,4 +1,5 @@
 import type { Project, Task } from "@dot/shared";
+import { importedNote } from "./rules.ts";
 import { RESEARCHER_ALLOWED_TOOLS, RESEARCHER_DENIED_TOOLS, RESEARCHER_TOOLS, SHELL_COMMANDS_TEXT } from "./researcher.ts";
 
 // The triage agent reads like the researcher and cannot change anything. Only its submit tool differs.
@@ -43,6 +44,7 @@ export function triagerBrief(task: Task, project: Project): string {
       ? `Working folder: ${project.repoPath} (a scratch folder, not a repository). Proposed tasks can only be reports, because this project has no code to change.`
       : `Working folder: ${project.repoPath}`,
     "",
+    importedNote(task),
     "Triage this and submit proposals with submit_proposals. Use ask_human if something is unclear.",
   ].join("\n");
 }

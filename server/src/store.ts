@@ -28,6 +28,8 @@ import type {
   Plan,
   PlanArtifact,
   Project,
+  MemoryStatus,
+  ProjectMemory,
   ProjectRule,
   Review,
   RepoHost,
@@ -45,7 +47,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
-import { DEFAULT_KIND, kindDef, nextRun, OUTPUTS_LIMIT, reportDocHeadline, taskKindsFor } from "@dot/shared";
+import { DEFAULT_KIND, MAX_MEMORY_NOTES, MAX_PENDING_MEMORY, kindDef, nextRun, OUTPUTS_LIMIT, reportDocHeadline, taskKindsFor } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -74,6 +76,7 @@ const PROJECT_COLUMNS = {
   browserTesting: "browser_testing",
   devCommand: "dev_command",
   devUrl: "dev_url",
+  favroBoard: "favro_board",
   claudeConfigDir: "claude_config_dir",
   claudeToken: "claude_token",
   taskBudgetUsd: "task_budget_usd",
@@ -109,6 +112,7 @@ function toProject(row: Row): Project {
     browserTesting: row.browser_testing === 1,
     devCommand: row.dev_command as string | null,
     devUrl: row.dev_url as string | null,
+    favroBoard: (row.favro_board as string | null) ?? null,
     claudeConfigDir: row.claude_config_dir as string | null,
     claudeToken: row.claude_token as string | null,
     taskBudgetUsd: row.task_budget_usd as number | null,
@@ -157,8 +161,21 @@ function toTask(row: Row): Task {
     costUsd: (row.cost_usd as number | undefined) ?? 0,
     blockedBy: parseBlockers(row.blocked_by),
     autoStart: row.auto_start === 1,
+    sourceRef: (row.source_ref as string | null) ?? null,
+    sourceUrl: (row.source_url as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+  };
+}
+
+function toMemory(row: Row): ProjectMemory {
+  return {
+    id: row.id as number,
+    projectId: row.project_id as number,
+    text: row.text as string,
+    status: row.status as MemoryStatus,
+    sourceTaskId: (row.source_task_id as number | null) ?? null,
+    createdAt: row.created_at as string,
   };
 }
 
@@ -467,7 +484,21 @@ export class Store {
     return toTask(row);
   }
 
-  createTask(data: TaskData, scheduleId: number | null = null): Task {
+  // True when a task that is not done waits for this one.
+  hasOpenDependants(id: number): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS found FROM task_dependencies d JOIN tasks t ON t.id = d.task_id WHERE d.blocked_by_id = ? AND t.column_key != 'done' LIMIT 1")
+      .get(id);
+    return row !== undefined;
+  }
+
+  // The task already made from this outside item, if any.
+  findTaskBySource(projectId: number, sourceRef: string): Task | null {
+    const row = this.db.prepare(`${TASK_SELECT} WHERE project_id = ? AND source_ref = ?`).get(projectId, sourceRef) as Row | undefined;
+    return row ? toTask(row) : null;
+  }
+
+  createTask(data: TaskData, scheduleId: number | null = null, source: { ref: string; url: string | null } | null = null): Task {
     const project = this.getProject(data.projectId);
     const kind = data.kind ?? DEFAULT_KIND;
     if (!taskKindsFor(project.kind).includes(kind)) {
@@ -484,10 +515,23 @@ export class Store {
       this.db.prepare("UPDATE projects SET next_task_number = ? WHERE id = ?").run(counter.n + 1, data.projectId);
       const result = this.db
         .prepare(
-          `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, schedule_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?, ?)`,
+          `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, schedule_id, source_ref, source_url, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(data.projectId, counter.n, data.title, data.description, kind, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, scheduleId, stamp, stamp);
+        .run(
+          data.projectId,
+          counter.n,
+          data.title,
+          data.description,
+          kind,
+          (last.max ?? 0) + POSITION_STEP,
+          data.autoStart ? 1 : 0,
+          scheduleId,
+          source?.ref ?? null,
+          source?.url ?? null,
+          stamp,
+          stamp,
+        );
       const newId = Number(result.lastInsertRowid);
       this.setBlockers(newId, data.projectId, data.blockedBy);
       return newId;
@@ -914,6 +958,66 @@ export class Store {
     if (row.origin !== "task") throw new HttpError(400, "Only images attached to the task can be removed");
     this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
     return attachment.path;
+  }
+
+  // Project memory: notes the agents saved for later tasks
+
+  listMemory(projectId: number): ProjectMemory[] {
+    this.getProject(projectId);
+    return (this.db.prepare("SELECT * FROM project_memory WHERE project_id = ? AND status <> 'dismissed' ORDER BY id").all(projectId) as Row[]).map(toMemory);
+  }
+
+  private memoryCount(projectId: number, status: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM project_memory WHERE project_id = ? AND status = ?").get(projectId, status) as { n: number };
+    return row.n;
+  }
+
+  // What the agents are told, oldest first. Only notes you accepted or wrote.
+  memoryNotes(projectId: number): string[] {
+    return (this.db.prepare("SELECT text FROM project_memory WHERE project_id = ? AND status = 'active' ORDER BY id").all(projectId) as { text: string }[]).map((r) => r.text);
+  }
+
+  // Returns null when the same note is already saved. Throws when the project holds as many as it may.
+  addMemory(projectId: number, text: string, sourceTaskId: number | null = null, status: MemoryStatus = "active"): ProjectMemory | null {
+    this.getProject(projectId);
+    const key = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+    // Dismissed suggestions stay in the table, hidden, so an agent cannot suggest the same note again.
+    const all = this.db.prepare("SELECT id, text, status FROM project_memory WHERE project_id = ?").all(projectId) as { id: number; text: string; status: string }[];
+    const same = all.find((n) => key(n.text) === key(text));
+    if (same) {
+      // A note you write yourself brings back one you dismissed.
+      if (status === "active" && same.status === "dismissed") return this.updateMemory(same.id, { status: "active" });
+      return null;
+    }
+    // Suggestions have their own, smaller limit, so ignored ones never keep you from writing a note.
+    if (status === "active" && this.memoryCount(projectId, "active") >= MAX_MEMORY_NOTES) throw new HttpError(409, `Memory is full (${MAX_MEMORY_NOTES} notes)`);
+    if (status === "suggested" && this.memoryCount(projectId, "suggested") >= MAX_PENDING_MEMORY) {
+      throw new HttpError(409, `${MAX_PENDING_MEMORY} suggestions are already waiting for the user`);
+    }
+    const result = this.db
+      .prepare("INSERT INTO project_memory (project_id, text, source_task_id, status, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(projectId, text, sourceTaskId, status, now());
+    return toMemory(this.db.prepare("SELECT * FROM project_memory WHERE id = ?").get(Number(result.lastInsertRowid)) as Row);
+  }
+
+  updateMemory(id: number, patch: { text?: string; status?: "active" }): ProjectMemory {
+    const row = this.db.prepare("SELECT * FROM project_memory WHERE id = ?").get(id) as Row | undefined;
+    if (!row) throw notFound("Note");
+    if (patch.status === "active" && row.status !== "active" && this.memoryCount(row.project_id as number, "active") >= MAX_MEMORY_NOTES) {
+      throw new HttpError(409, `Memory is full (${MAX_MEMORY_NOTES} notes). Delete one first.`);
+    }
+    this.db
+      .prepare("UPDATE project_memory SET text = ?, status = ? WHERE id = ?")
+      .run(patch.text ?? (row.text as string), patch.status ?? (row.status as string), id);
+    return toMemory(this.db.prepare("SELECT * FROM project_memory WHERE id = ?").get(id) as Row);
+  }
+
+  // A suggestion is dismissed and kept hidden. A note that was accepted or written is deleted.
+  deleteMemory(id: number): void {
+    const dismissed = this.db.prepare("UPDATE project_memory SET status = 'dismissed' WHERE id = ? AND status = 'suggested'").run(id);
+    if (dismissed.changes > 0) return;
+    const result = this.db.prepare("DELETE FROM project_memory WHERE id = ?").run(id);
+    if (result.changes === 0) throw notFound("Note");
   }
 
   // Project rules

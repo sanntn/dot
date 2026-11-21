@@ -1,11 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   COLUMN_LABELS,
   MAX_REVIEW_ROUNDS,
   defaultTaskKind,
   kindDef,
+  planSubtaskProblem,
   type TaskKind,
   stageColumn,
   stageLabel,
@@ -78,6 +79,7 @@ import {
 } from "./git.ts";
 import { agentTools } from "./agentTools.ts";
 import { MergeStep } from "./merge.ts";
+import { capturePreview, previewUrl } from "./preview.ts";
 import { handleMcp, type McpTool } from "./mcp.ts";
 import type { Attachment, Store } from "./store.ts";
 
@@ -86,6 +88,8 @@ export type OrchestratorConfig = {
   maxAgents: number;
   model: string;
   worktreesDir: string;
+  // Where chat images live. Previews are saved here as images. Without it, previews are off.
+  attachmentsDir?: string;
   // Deny rules every agent gets, see agents/guards.ts.
   guardRules: string[];
   // An agent mid-turn that sends nothing for this long is stopped and flagged. 0 turns the check off.
@@ -164,7 +168,7 @@ const TRIAGE_CONFIG: StageConfig = {
 };
 
 // The research-stage agent of each kind: its settings and what it reads first. A new kind adds a row here.
-const RESEARCH_AGENTS: Record<TaskKind, { config: StageConfig; brief: (task: Task, project: Project, rules: string[]) => string }> = {
+const RESEARCH_AGENTS: Record<TaskKind, { config: StageConfig; brief: (task: Task, project: Project, rules: string[], memory: string[]) => string }> = {
   code: { config: STAGE_CONFIG.research, brief: researcherBrief },
   report: { config: REPORT_CONFIG, brief: reporterBrief },
   triage: { config: TRIAGE_CONFIG, brief: triagerBrief },
@@ -176,8 +180,8 @@ function stageConfig(kind: TaskKind, stage: AgentStage): StageConfig {
 }
 
 // What a research-stage agent reads first, by kind.
-function researchBrief(task: Task, project: Project, rules: string[]): string {
-  return (RESEARCH_AGENTS[task.kind] ?? RESEARCH_AGENTS.code).brief(task, project, rules);
+function researchBrief(task: Task, project: Project, rules: string[], memory: string[]): string {
+  return (RESEARCH_AGENTS[task.kind] ?? RESEARCH_AGENTS.code).brief(task, project, rules, memory);
 }
 
 // In-memory state for a run while Dot is up. The database holds everything that must survive a restart.
@@ -245,7 +249,13 @@ export class Orchestrator {
 
   // Public actions
 
-  startMerge(taskId: number, options: { skipCi: boolean }): Promise<Task> {
+  async startMerge(taskId: number, options: { skipCi: boolean }): Promise<Task> {
+    // The merge removes the worktree, so a preview still using it stops, and is gone, first.
+    const preview = this.previewAborts.get(taskId);
+    if (preview) {
+      preview.abort.abort();
+      await preview.done;
+    }
     return this.mergeStep.start(taskId, options);
   }
 
@@ -270,7 +280,7 @@ export class Orchestrator {
     this.store.setNeedsInput(task.id, false);
     const run = this.store.createRun(task.id, "research", randomUUID());
     this.store.addMessage({ taskId: task.id, runId: run.id, role: "system", kind: "status", text: note });
-    this.dispatch(run.id, buildContent(researchBrief(task, project, this.store.activeRules(project.id)), this.store.taskAttachments(task.id)), true);
+    this.dispatch(run.id, buildContent(researchBrief(task, project, this.store.activeRules(project.id), this.store.memoryNotes(project.id)), this.store.taskAttachments(task.id)), true);
     this.publish(task.id);
     return this.store.getTask(task.id);
   }
@@ -319,7 +329,7 @@ export class Orchestrator {
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `${stageLabel(task.kind, "research")} resumed.` });
     const content: ContentBlock[] = run.sessionStarted
       ? [{ type: "text", text: `Continue the research. When you are ready, call ${kindDef(task.kind).submitTool}. If you need a decision from the user, call ask_human.` }]
-      : buildContent(researchBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
+      : buildContent(researchBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId), this.store.memoryNotes(task.projectId)), this.store.taskAttachments(taskId));
     this.dispatch(run.id, content, true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -431,7 +441,7 @@ export class Orchestrator {
       text: existing ? `Executor resumed on ${branch}.` : `Execution started on ${branch}.`,
     });
 
-    const brief = executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch, this.store.activeRules(project.id));
+    const brief = executorBrief(this.store.getTask(taskId), project, plan.plan, plan.version, branch, this.store.activeRules(project.id), this.store.memoryNotes(project.id));
     const prompt = run.sessionStarted
       ? "Continue implementing the approved plan. When the work is committed, call submit_execution_report."
       : latest && options.fresh
@@ -497,7 +507,7 @@ export class Orchestrator {
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `Review round ${round} started.` });
     const prompt = run.sessionStarted
       ? reviewerFollowUp(report, round, baseRef, checks)
-      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef, checks, this.store.activeRules(project.id));
+      : reviewerBrief(this.store.getTask(taskId), project, plan.plan, plan.version, report, round, baseRef, checks, this.store.activeRules(project.id), this.store.memoryNotes(project.id));
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -508,6 +518,8 @@ export class Orchestrator {
   private readonly checksFixed = new Set<number>();
   // The project checks running for a task, so Stop can end them.
   private readonly checkAborts = new Map<number, AbortController>();
+  // A running preview: abort stops it, and done settles once its dev server and browser are gone.
+  private readonly previewAborts = new Map<number, { abort: AbortController; done: Promise<void> }>();
 
   // Runs the project's test, lint and typecheck commands in the task's worktree and posts the results.
   // Null when a Stop ended the run.
@@ -801,6 +813,8 @@ ${checksSummary(results)}` });
     const saved = this.store.addPlan(taskId, null, "user", {
       ...plan,
       steps: kept,
+      // Its step positions no longer match.
+      subtasks: undefined,
       assumptions: [...plan.assumptions, `${moved.length === 1 ? "One step is" : `${moved.length} steps are`} left to #${created.number}, ${created.title}.`],
     });
     this.store.addMessage({
@@ -813,6 +827,121 @@ ${checksSummary(results)}` });
     this.publish(taskId);
     this.bus.publish({ type: "tasks.changed", projectId: task.projectId, taskId: created.id });
     return { task: created, plan: saved };
+  }
+
+  // Starts the task's dev server in its worktree, takes a picture of the page and posts it in the chat.
+  // It runs in the background: starting a dev server can take a minute.
+  startPreview(taskId: number): Task {
+    const task = this.store.getTask(taskId);
+    const attachmentsDir = this.config.attachmentsDir;
+    if (!attachmentsDir) throw new HttpError(409, "Previews are not set up on this server");
+    if (task.column !== "merge_approval") throw new HttpError(409, "A preview is taken while the change waits for merge approval");
+    if (!task.worktreePath || !existsSync(task.worktreePath)) throw new HttpError(409, "The worktree was removed, so there is nothing to preview");
+    if (this.previewAborts.has(taskId)) throw new HttpError(409, "A preview is already running");
+    const project = this.store.getProject(task.projectId);
+    if (!project.devCommand || !previewUrl(project.devUrl)) {
+      throw new HttpError(409, "Set a dev command and a dev URL on this machine, such as http://localhost:5173, in the project settings.");
+    }
+
+    const abort = new AbortController();
+    let finished!: () => void;
+    this.previewAborts.set(taskId, { abort, done: new Promise<void>((resolve) => (finished = resolve)) });
+    this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "Starting the dev server for a preview." });
+    this.publish(taskId);
+    const worktree = task.worktreePath;
+    void (async () => {
+      try {
+        const result = await capturePreview(project, worktree, abort.signal);
+        if (abort.signal.aborted) return;
+        if (!result.ok) {
+          this.store.addMessage({ taskId, runId: null, role: "system", kind: "error", text: `The preview failed.
+
+${result.error}` });
+          return;
+        }
+        const dir = join(attachmentsDir, String(taskId));
+        mkdirSync(dir, { recursive: true });
+        const fileName = `preview-${Date.now()}.png`;
+        const path = join(dir, fileName);
+        writeFileSync(path, result.png);
+        const saved = this.store.addAttachment({ taskId, fileName, mediaType: "image/png", size: result.png.length, path, origin: "chat" });
+        this.store.addMessage({
+          taskId,
+          runId: null,
+          role: "system",
+          kind: "status",
+          text: result.note,
+          data: { attachments: [{ id: saved.id, fileName: saved.fileName, mediaType: saved.mediaType }] },
+        });
+      } catch (err) {
+        this.store.addMessage({ taskId, runId: null, role: "system", kind: "error", text: `The preview failed.
+
+${err instanceof Error ? err.message : String(err)}` });
+      } finally {
+        this.previewAborts.delete(taskId);
+        finished();
+        this.publish(taskId);
+      }
+    })();
+    return this.store.getTask(taskId);
+  }
+
+  // Turns the plan's suggested subtasks into separate tasks. Each one researches and builds on its own, so
+  // tasks with no blocker run side by side, up to the agent limit. This task has nothing left to do, so it is closed.
+  splitIntoSubtasks(taskId: number): Task[] {
+    const task = this.store.getTask(taskId);
+    if (task.column !== "plan_review") throw new HttpError(409, "A plan can be split while it waits in Plan review");
+    const latest = this.store.latestPlan(taskId);
+    if (!latest) throw new HttpError(409, "This task has no plan yet");
+    const { plan } = latest;
+    const problem = planSubtaskProblem(plan);
+    if (problem) throw new HttpError(400, problem);
+    const subtasks = plan.subtasks ?? [];
+    if (subtasks.length === 0) throw new HttpError(409, "The plan suggests no subtasks");
+    // Closing this task would count as finishing it, and whatever waits on it would start too early.
+    if (this.store.hasOpenDependants(taskId)) {
+      throw new HttpError(409, "Other tasks wait for this one. Remove that wait, or approve the plan as one task, before splitting it into several.");
+    }
+
+    const made: Task[] = [];
+    try {
+    for (const sub of subtasks) {
+      const description = [
+        `Part of #${task.number}, ${task.title}, which was split into ${subtasks.length} tasks.`,
+        `Goal of #${task.number}: ${plan.goal}`,
+        `Steps for this task:\n${sub.steps.map((s, n) => `${n + 1}. ${plan.steps[s]}`).join("\n")}`,
+        plan.context.trim() ? `Context found while planning #${task.number}:\n${plan.context.trim()}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      made.push(
+        this.store.createTask({
+          projectId: task.projectId,
+          title: sub.title,
+          description,
+          kind: task.kind,
+          blockedBy: sub.dependsOn.map((d) => made[d]!.id),
+          autoStart: true,
+        }),
+      );
+    }
+    this.store.setAgentState(taskId, "idle");
+    this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
+    } catch (err) {
+      // All or nothing, so a retry does not leave duplicates behind.
+      for (const t of made.reverse()) this.store.deleteTask(t.id);
+      throw err;
+    }
+    this.store.addMessage({
+      taskId,
+      runId: null,
+      role: "system",
+      kind: "status",
+      text: `Split into ${made.map((t) => `#${t.number} ${t.title}`).join(", ")}. This task is closed.`,
+    });
+    this.publish(taskId);
+    this.bus.publish({ type: "tasks.changed", projectId: task.projectId });
+    return made;
   }
 
   savePlan(taskId: number, plan: Plan) {
@@ -831,6 +960,7 @@ ${checksSummary(results)}` });
     // A running merge stops at its next step. Host API calls already sent still finish.
     this.mergeStep.abort(taskId);
     this.checkAborts.get(taskId)?.abort();
+    this.previewAborts.get(taskId)?.abort.abort();
     const exits: Promise<void>[] = [];
     for (const live of this.live.values()) {
       if (live.taskId !== taskId) continue;
