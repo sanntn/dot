@@ -160,7 +160,12 @@ if (existsSync(resolve(webDir, "index.html"))) {
   const rel = relative(process.cwd(), webDir).replaceAll("\\", "/") || ".";
   app.use("*", serveStatic({ root: rel }));
   // Unknown paths outside the API get the board, so a reload on any URL works.
-  app.get("*", (c, next) => (c.req.path.startsWith("/api/") ? next() : serveStatic({ root: rel, path: "index.html" })(c, next)));
+  // Paths with a file extension are asset requests. A missing one should 404, not return HTML.
+  app.get("*", (c, next) =>
+    c.req.path.startsWith("/api/") || /\.[a-z0-9]+$/i.test(c.req.path)
+      ? next()
+      : serveStatic({ root: rel, path: "index.html" })(c, next),
+  );
 }
 
 // Loopback by default. Dot runs agents with shell access, so a network address needs DOT_PASSWORD (checked above).
