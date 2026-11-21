@@ -1,9 +1,10 @@
 # Dot for Coolify (or any Docker host). One container runs the API and serves the built board.
 FROM node:24-bookworm-slim
 
-# git for worktrees and clones, gosu to drop root after fixing volume ownership.
+# git for worktrees and clones, gosu to drop root after fixing volume ownership,
+# chromium and fonts for the screenshots that previews take.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates gosu \
+ && apt-get install -y --no-install-recommends git ca-certificates gosu chromium fonts-liberation \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code \
  && mkdir -p /data \
