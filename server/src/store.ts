@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   ChatRole,
   Column,
+  ProjectKind,
   ReportDoc,
   ReportDocArtifact,
   TaskKind,
@@ -33,7 +34,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
-import { DEFAULT_KIND } from "@dot/shared";
+import { DEFAULT_KIND, kindDef, taskKindsFor } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -85,6 +86,7 @@ function toProject(row: Row): Project {
   return {
     id: row.id as number,
     name: row.name as string,
+    kind: row.kind as ProjectKind,
     repoPath: row.repo_path as string,
     baseBranch: row.base_branch as string,
     repoHost: row.repo_host as RepoHost | null,
@@ -223,9 +225,9 @@ export class Store {
 
   createProject(data: ProjectData): Project {
     const keys = Object.keys(PROJECT_COLUMNS) as (keyof typeof PROJECT_COLUMNS)[];
-    const columns = [...keys.map((k) => PROJECT_COLUMNS[k]), "created_at", "updated_at"];
+    const columns = [...keys.map((k) => PROJECT_COLUMNS[k]), "kind", "created_at", "updated_at"];
     const stamp = now();
-    const values = [...keys.map((k) => toSql(data[k])), stamp, stamp];
+    const values = [...keys.map((k) => toSql(data[k])), data.kind ?? "repo", stamp, stamp];
     const result = this.db
       .prepare(`INSERT INTO projects (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
       .run(...values);
@@ -278,7 +280,11 @@ export class Store {
   }
 
   createTask(data: TaskData): Task {
-    this.getProject(data.projectId);
+    const project = this.getProject(data.projectId);
+    const kind = data.kind ?? DEFAULT_KIND;
+    if (!taskKindsFor(project.kind).includes(kind)) {
+      throw new HttpError(400, `A ${project.kind} project cannot hold ${kindDef(kind).label.toLowerCase()} tasks`);
+    }
     const last = this.db
       .prepare("SELECT MAX(position) AS max FROM tasks WHERE project_id = ? AND column_key = 'inbox'")
       .get(data.projectId) as { max: number | null };
@@ -293,7 +299,7 @@ export class Store {
           `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?)`,
         )
-        .run(data.projectId, counter.n, data.title, data.description, data.kind ?? DEFAULT_KIND, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
+        .run(data.projectId, counter.n, data.title, data.description, kind, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
       const newId = Number(result.lastInsertRowid);
       this.setBlockers(newId, data.projectId, data.blockedBy);
       return newId;

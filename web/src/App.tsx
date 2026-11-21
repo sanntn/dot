@@ -375,7 +375,7 @@ export function App() {
         {announcement}
       </div>
 
-      {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} tasks={tasks} onClose={closeDialog} onError={setError} />}
+      {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} projectKind={project?.kind ?? "repo"} tasks={tasks} onClose={closeDialog} onError={setError} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} tasks={tasks} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
       {dialog?.kind === "preferences" && <PreferencesDialog projectId={projectId} onClose={closeDialog} />}

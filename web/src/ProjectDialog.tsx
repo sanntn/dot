@@ -1,4 +1,4 @@
-import { MODEL_CHOICES, REPO_HOST_LABELS, STAGE_LABELS, type AgentStage, type ClaudeAccount, type ClaudeTokens, type Project, type ProjectInput, type RemoteInfo, type RepoHost } from "@dot/shared";
+import { MODEL_CHOICES, REPO_HOST_LABELS, STAGE_LABELS, type AgentStage, type ClaudeAccount, type ClaudeTokens, type Project, type ProjectInput, type ProjectKind, type RemoteInfo, type RepoHost } from "@dot/shared";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, errorMessage } from "./api.ts";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 
@@ -39,6 +40,9 @@ export function ProjectDialog(props: {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [removeFolder, setRemoveFolder] = useState(false);
+  // A project is a repository, or a workspace with no repository. It cannot change after it is made.
+  const [kind, setKind] = useState<ProjectKind>(project?.kind ?? "repo");
+  const isWorkspace = kind === "workspace";
   const [repoPath, setRepoPath] = useState(project?.repoPath ?? "");
   const [repoHost, setRepoHost] = useState<RepoHost | "auto">(project?.repoHost ?? "auto");
   // A new project can name a GitHub repository for Dot to clone, when a GitHub token is set.
@@ -89,22 +93,28 @@ export function ProjectDialog(props: {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const text = (name: string) => String(form.get(name) ?? "").trim();
-    const input: ProjectInput = {
-      name: text("name"),
-      ...(source === "clone" && !project ? { cloneRepo: text("cloneRepo") } : { repoPath: text("repoPath") }),
-      baseBranch: text("baseBranch") || "main",
-      browserTesting: form.get("browserTesting") === "on",
+    const shared = {
       claudeConfigDir: text("claudeConfigDir") || null,
       claudeToken: claudeToken === "default" ? null : claudeToken,
       taskBudgetUsd: text("taskBudgetUsd") === "" ? null : Number(text("taskBudgetUsd")),
       researchModel: models.research === "default" ? null : models.research,
+    };
+    const input: ProjectInput = isWorkspace
+      ? { kind: "workspace", name: text("name"), ...shared }
+      : {
+      kind: "repo",
+      name: text("name"),
+      ...(source === "clone" && !project ? { cloneRepo: text("cloneRepo") } : { repoPath: text("repoPath") }),
+      baseBranch: text("baseBranch") || "main",
+      browserTesting: form.get("browserTesting") === "on",
+      ...shared,
       executeModel: models.execute === "default" ? null : models.execute,
       reviewModel: models.review === "default" ? null : models.review,
       repoHost: source === "clone" && !project ? cloneHost : repoHost === "auto" ? null : repoHost,
       repoOwner: text("repoOwner") || null,
       repoName: text("repoName") || null,
     };
-    for (const field of TEXT_FIELDS) input[field.name] = text(field.name) || null;
+    if (!isWorkspace) for (const field of TEXT_FIELDS) input[field.name] = text(field.name) || null;
 
     // Once saved, the button only closes. A base branch swap stays on screen until it is read.
     if (notice) {
@@ -134,15 +144,27 @@ export function ProjectDialog(props: {
           <DialogHeader>
             <DialogTitle>{project ? "Project settings" : "New project"}</DialogTitle>
             <DialogDescription>
-              A project points Dot at a git repo, either a folder on this machine or a GitHub or Bitbucket repository Dot clones. Agents work in worktrees of that repo.
+              {isWorkspace
+                ? "A workspace has no repository. Dot makes a scratch folder for its agents. It holds tasks that don't change code, such as reports."
+                : "A project points Dot at a git repo, either a folder on this machine or a GitHub or Bitbucket repository Dot clones. Agents work in worktrees of that repo."}
             </DialogDescription>
           </DialogHeader>
+
+          {!project && (
+            <Tabs value={kind} onValueChange={(v) => setKind(v as ProjectKind)}>
+              <TabsList>
+                <TabsTrigger value="repo">Repository</TabsTrigger>
+                <TabsTrigger value="workspace">Workspace</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
 
           <div className="grid gap-2">
             <Label htmlFor={`${id}-name`}>Name</Label>
             <Input id={`${id}-name`} name="name" required maxLength={100} defaultValue={project?.name} />
           </div>
 
+          {!isWorkspace && (
           <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
             {source === "clone" && !project ? (
               <div className="grid gap-2">
@@ -226,9 +248,11 @@ export function ProjectDialog(props: {
               />
             </div>
           </div>
+          )}
 
-          <PullRequestFields id={id} project={project} repoPath={repoPath} host={repoHost} onHostChange={setRepoHost} />
+          {!isWorkspace && <PullRequestFields id={id} project={project} repoPath={repoPath} host={repoHost} onHostChange={setRepoHost} />}
 
+          {!isWorkspace && (
           <fieldset className="grid gap-4 rounded-lg border p-4">
             <legend className="px-1 text-sm font-medium">Commands</legend>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -258,16 +282,17 @@ export function ProjectDialog(props: {
               </Label>
             </div>
           </fieldset>
+          )}
 
           <fieldset className="grid gap-3">
-            <legend className="mb-1 text-sm font-medium">Model per stage</legend>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {(["research", "execute", "review"] as const).map((stage) => {
+            <legend className="mb-1 text-sm font-medium">{isWorkspace ? "Model" : "Model per stage"}</legend>
+            <div className={isWorkspace ? "grid gap-3 sm:max-w-xs" : "grid gap-3 sm:grid-cols-3"}>
+              {(isWorkspace ? (["research"] as const) : (["research", "execute", "review"] as const)).map((stage) => {
                 const value = models[stage];
                 const custom = value !== "default" && !(MODEL_CHOICES as readonly string[]).includes(value);
                 return (
                   <div key={stage} className="grid gap-2">
-                    <Label htmlFor={`${id}-model-${stage}`}>{STAGE_LABELS[stage]}</Label>
+                    <Label htmlFor={`${id}-model-${stage}`}>{isWorkspace ? "Report agent" : STAGE_LABELS[stage]}</Label>
                     <Select value={value} onValueChange={(v) => setModels((m) => ({ ...m, [stage]: v }))}>
                       <SelectTrigger id={`${id}-model-${stage}`} className="w-full">
                         <SelectValue />
@@ -339,7 +364,7 @@ export function ProjectDialog(props: {
                   <span className="grid gap-3">
                     <span>
                       "{project.name}" and all its tasks will be removed.
-                      {project.cloned ? "" : " The repo on disk is not touched."} This cannot be undone.
+                      {project.kind === "workspace" ? " Its scratch folder is removed too." : project.cloned ? "" : " The repo on disk is not touched."} This cannot be undone.
                     </span>
                     {project.cloned && (
                       <span className="flex items-start gap-2">

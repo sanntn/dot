@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -142,7 +142,7 @@ export function createApp(
   store: Store,
   bus: EventBus,
   orchestrator: Orchestrator,
-  options: { attachmentsDir: string; reposDir: string; auth: Auth; allowedHosts?: string[]; storage?: StoragePaths },
+  options: { attachmentsDir: string; reposDir: string; workspacesDir?: string; prepareAgentFolder?: (folder: string) => void; auth: Auth; allowedHosts?: string[]; storage?: StoragePaths },
 ) {
   const extraHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
   const app = new Hono().basePath("/api");
@@ -194,11 +194,30 @@ export function createApp(
   };
   const withClone = (project: Project): Project => ({ ...project, cloned: isClone(project.repoPath) });
 
+  // A workspace project works in a scratch folder Dot made directly inside the workspaces folder.
+  const workspacesRoot = resolve(options.workspacesDir ?? join(options.reposDir, "..", "workspaces"));
+  const isWorkspaceFolder = (path: string) => dirname(resolve(path)) === workspacesRoot;
+
   app.get("/projects", (c) => c.json(store.listProjects().map(withClone)));
 
   app.post("/projects", async (c) => {
     const parsed = await parseBody(c, ProjectInputSchema);
     const { cloneRepo: given, ...data } = parsed;
+    if (data.kind === "workspace") {
+      // No repository. The agents get an empty folder of their own to work in.
+      const slug = data.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "workspace";
+      const folder = join(workspacesRoot, `${slug}-${randomBytes(3).toString("hex")}`);
+      mkdirSync(folder, { recursive: true });
+      options.prepareAgentFolder?.(folder);
+      const workspace = store.createProject({
+        ...data,
+        repoPath: folder,
+        claudeConfigDir: checkConfigDir(data.claudeConfigDir),
+        claudeToken: checkTokenName(data.claudeToken),
+      });
+      bus.publish({ type: "projects.changed" });
+      return c.json(withClone(workspace), 201);
+    }
     let baseBranchNote: string | undefined;
     let toClone = given;
     // A pasted remote URL in the path field means "clone this", not a folder called https:/github.com/...
@@ -255,6 +274,8 @@ export function createApp(
 
   app.patch("/projects/:id", async (c) => {
     const patch = await parseBody(c, ProjectPatchSchema);
+    // A workspace's folder is Dot's own. Only a repository project can point somewhere else.
+    if (store.getProject(idParam(c)).kind === "workspace") delete patch.repoPath;
     if (patch.repoPath !== undefined) patch.repoPath = checkRepoPath(patch.repoPath);
     if (patch.claudeConfigDir !== undefined) patch.claudeConfigDir = checkConfigDir(patch.claudeConfigDir);
     if (patch.claudeToken !== undefined) patch.claudeToken = checkTokenName(patch.claudeToken);
@@ -267,11 +288,13 @@ export function createApp(
   // project still uses the folder.
   app.delete("/projects/:id", async (c) => {
     const id = idParam(c);
-    const removeFolder = c.req.query("removeFolder") === "1";
     const target = store.listProjects().find((p) => p.id === id);
+    // A workspace's scratch folder holds nothing of yours, so it always goes with the project.
+    const ownWorkspace = target?.kind === "workspace" && isWorkspaceFolder(target.repoPath);
+    const removeFolder = c.req.query("removeFolder") === "1" || ownWorkspace;
     if (removeFolder) {
       if (!target) throw notFound("Project");
-      if (!isClone(target.repoPath)) throw new HttpError(400, "Dot only deletes folders it cloned itself.");
+      if (!ownWorkspace && !isClone(target.repoPath)) throw new HttpError(400, "Dot only deletes folders it cloned itself.");
       const sharedBy = store.listProjects().find((p) => p.id !== id && resolve(p.repoPath) === resolve(target.repoPath));
       if (sharedBy) throw new HttpError(409, `The folder is also used by the project "${sharedBy.name}".`);
     }

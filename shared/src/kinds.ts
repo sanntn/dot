@@ -51,6 +51,11 @@ export const KINDS: Record<TaskKind, KindDef> = {
 
 export const DEFAULT_KIND: TaskKind = "code";
 
+// Which task kinds a project accepts. A workspace has no repository, so it cannot hold code changes.
+export function taskKindsFor(projectKind: string): readonly TaskKind[] {
+  return projectKind === "workspace" ? TASK_KINDS.filter((k) => k !== "code") : TASK_KINDS;
+}
+
 // The registry entry for a kind. A value this build does not know, such as a row saved by a newer
 // build, reads as the default kind instead of crashing the board.
 export function kindDef(kind: string): KindDef {

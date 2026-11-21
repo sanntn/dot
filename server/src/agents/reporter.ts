@@ -36,7 +36,9 @@ export function reporterBrief(task: Task, project: Project): string {
     task.description.trim() || "(No description given.)",
     "",
     `Project: ${project.name}`,
-    `Working folder: ${project.repoPath}`,
+    project.kind === "workspace"
+      ? `Working folder: ${project.repoPath} (an empty scratch folder, not a repository)`
+      : `Working folder: ${project.repoPath}`,
     "",
     "Research this and submit a report with submit_report. Use ask_human if something is unclear.",
   ].join("\n");

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { MIGRATIONS, openDb } from "../src/db.ts";
 
-test("a database from before task kinds opens, and its tasks become code changes", () => {
+test("a database from before task and project kinds opens, and its rows keep working", () => {
   const dir = mkdtempSync(join(tmpdir(), "dot-db-"));
   try {
     const file = join(dir, "old.db");
@@ -29,6 +29,7 @@ test("a database from before task kinds opens, and its tasks become code changes
     const db = openDb(file);
     const row = db.prepare("SELECT kind, column_key FROM tasks WHERE title = 'Old task'").get() as { kind: string; column_key: string };
     assert.deepEqual({ ...row }, { kind: "code", column_key: "research" });
+    assert.equal((db.prepare("SELECT kind FROM projects").get() as { kind: string }).kind, "repo");
     assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, MIGRATIONS.length);
     db.close();
   } finally {

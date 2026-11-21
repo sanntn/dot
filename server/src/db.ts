@@ -325,6 +325,10 @@ export const MIGRATIONS: string[] = [
     );
   END;
   `,
+  `
+  -- A project is a repository or a workspace. A workspace has no repository, so repo_path holds the scratch folder Dot made for it.
+  ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo';
+  `,
 ];
 
 export type Db = DatabaseSync;

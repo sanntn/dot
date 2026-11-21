@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { COLUMNS, DEFAULT_KIND, KINDS, TASK_KINDS, kindDef, laneOf, stageColumn, stageLabel } from "@dot/shared";
+import { COLUMNS, DEFAULT_KIND, KINDS, TASK_KINDS, kindDef, laneOf, stageColumn, stageLabel, taskKindsFor } from "@dot/shared";
 
 const card = (kind: string, column: string, extra: object = {}) =>
   ({ kind, column, needsInput: false, agentState: "idle", ...extra }) as Parameters<typeof laneOf>[0];
@@ -41,4 +41,10 @@ test("stages exist per kind, and the report agent has its own name", () => {
   assert.equal(stageLabel("report", "research"), "Report agent");
   assert.equal(stageLabel("code", "research"), "Researcher");
   assert.equal(stageLabel("report", "execute"), "Executor");
+});
+
+test("a workspace project offers every kind except code changes", () => {
+  assert.deepEqual([...taskKindsFor("repo")], [...TASK_KINDS]);
+  assert.ok(!taskKindsFor("workspace").includes("code"));
+  assert.ok(taskKindsFor("workspace").includes("report"));
 });

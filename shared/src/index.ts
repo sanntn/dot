@@ -48,6 +48,12 @@ export type RemoteInfo = {
   name: string | null;
 };
 
+// A project is a git repository, or a workspace with no repository. A workspace holds tasks that do not
+// change code, such as reports. Dot gives it a scratch folder for its agents to work in.
+export const PROJECT_KINDS = ["repo", "workspace"] as const;
+export const ProjectKindSchema = z.enum(PROJECT_KINDS);
+export type ProjectKind = z.infer<typeof ProjectKindSchema>;
+
 // Aliases the model picker offers. A project may also hold a full model name set through the API.
 export const MODEL_CHOICES = ["opus", "sonnet", "haiku"] as const;
 const modelName = z
@@ -93,13 +99,14 @@ export const CloneRepoSchema = z.string().trim().regex(/^[\w.-]+\/[\w.-]+$/, "Us
 // on the host in repoHost (GitHub when left out).
 export const ProjectInputSchema = projectFields
   .extend({
+    kind: ProjectKindSchema.default("repo"),
     repoPath: projectFields.shape.repoPath.optional(),
     cloneRepo: CloneRepoSchema.optional(),
     baseBranch: projectFields.shape.baseBranch.default("main"),
     browserTesting: z.boolean().default(false),
   })
-  .refine((p) => Boolean(p.repoPath) !== Boolean(p.cloneRepo), {
-    message: "Give either a repo path or a repository to clone",
+  .refine((p) => (p.kind === "workspace" ? !p.repoPath && !p.cloneRepo : Boolean(p.repoPath) !== Boolean(p.cloneRepo)), {
+    message: "Give either a repo path or a repository to clone. A workspace has neither.",
     path: ["repoPath"],
   });
 export type ProjectInput = z.input<typeof ProjectInputSchema>;
@@ -110,6 +117,8 @@ export type ProjectPatch = z.input<typeof ProjectPatchSchema>;
 export const ProjectSchema = z.object({
   id: z.number().int(),
   name: z.string(),
+  kind: ProjectKindSchema,
+  // For a workspace, the scratch folder Dot made for it.
   repoPath: z.string(),
   baseBranch: z.string(),
   repoHost: RepoHostSchema.nullable(),

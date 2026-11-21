@@ -1,7 +1,7 @@
 import { taskMarkdown } from "../src/export.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -569,4 +569,48 @@ test("approving a report ends the agent's work and clears the question flag", as
   assert.equal(done.column, "done");
   assert.equal(done.needsInput, false);
   assert.notEqual(h.store.getTask(task.id).agentState, "running");
+});
+
+test("a workspace project has no repository, takes only reports, and runs its agent in its own folder", async () => {
+  const h = await harness([{ name: "reporter", turns: [[{ tool: "submit_report", args: reportDoc("No repo needed.") }]] }]);
+  const call = (path: string, method: string, body?: unknown) =>
+    h.app.request(`/api${path}`, {
+      method,
+      headers: { "content-type": "application/json", host: "127.0.0.1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  const created = await call("/projects", "POST", { name: "Research Desk", kind: "workspace" });
+  assert.equal(created.status, 201);
+  const workspace = (await created.json()) as { id: number; kind: string; repoPath: string };
+  assert.equal(workspace.kind, "workspace");
+  assert.match(workspace.repoPath, /research-desk-[0-9a-f]{6}$/);
+  assert.ok(existsSync(workspace.repoPath));
+
+  // A workspace names no repository, and it cannot hold code changes.
+  assert.equal((await call("/projects", "POST", { name: "Bad", kind: "workspace", repoPath: h.repo })).status, 400);
+  const code = await call("/tasks", "POST", { projectId: workspace.id, title: "Change code", kind: "code" });
+  assert.equal(code.status, 400);
+  assert.match(((await code.json()) as { error: string }).error, /workspace project cannot hold code change/);
+  assert.equal((await call("/tasks/batch", "POST", { projectId: workspace.id, titles: ["a"], kind: "code" })).status, 400);
+
+  // Its folder cannot be repointed.
+  const patched = await call(`/projects/${workspace.id}`, "PATCH", { name: "Research Desk 2", repoPath: h.repo });
+  assert.equal(patched.status, 200);
+  assert.equal(((await patched.json()) as { repoPath: string }).repoPath, workspace.repoPath);
+
+  // A report runs there, in the scratch folder rather than a repository.
+  const made = await call("/tasks", "POST", { projectId: workspace.id, title: "Look into hosts", kind: "report" });
+  assert.equal(made.status, 201);
+  const task = (await made.json()) as { id: number };
+  h.orchestrator.startResearch(task.id);
+  await waitFor("report review", () => h.store.getTask(task.id).column === "report_review");
+  const launch = h.calls().find((c) => "prompt" in c)!;
+  assert.equal(String(launch.cwd).toLowerCase(), workspace.repoPath.toLowerCase());
+  assert.match(String(launch.prompt), /scratch folder, not a repository/);
+
+  // Deleting the project removes the folder too.
+  await h.orchestrator.stop(task.id);
+  assert.equal((await call(`/projects/${workspace.id}`, "DELETE")).status, 204);
+  assert.equal(existsSync(workspace.repoPath), false);
 });

@@ -1,4 +1,4 @@
-import { DEFAULT_KIND, IMAGE_TYPES, KINDS, MAX_BATCH, TASK_KINDS, type Task, type TaskKind, type TaskTemplate } from "@dot/shared";
+import { IMAGE_TYPES, kindDef, MAX_BATCH, taskKindsFor, type ProjectKind, type Task, type TaskKind, type TaskTemplate } from "@dot/shared";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ const MAX_IMAGES = 5;
 
 export function TaskDialog(props: {
   projectId: number;
+  projectKind: ProjectKind;
   tasks: Task[];
   onClose: () => void;
   onError: (message: string) => void;
@@ -41,7 +42,9 @@ export function TaskDialog(props: {
   const [fill, setFill] = useState({ n: 0, title: "", description: "" });
   const [blockers, setBlockers] = useState<number[]>([]);
   const [autoStart, setAutoStart] = useState(false);
-  const [kind, setKind] = useState<TaskKind>(DEFAULT_KIND);
+  // A workspace has no repository, so it only offers kinds that don't change code.
+  const kinds = taskKindsFor(props.projectKind);
+  const [kind, setKind] = useState<TaskKind>(kinds[0]!);
   const [images, setImages] = useState<File[]>([]);
   const [list, setList] = useState("");
   const [templateName, setTemplateName] = useState("");
@@ -165,14 +168,14 @@ export function TaskDialog(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {TASK_KINDS.map((k) => (
+                {kinds.map((k) => (
                   <SelectItem key={k} value={k}>
-                    {KINDS[k].label}
+                    {kindDef(k).label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">{KINDS[kind].blurb}</p>
+            <p className="text-xs text-muted-foreground">{kindDef(kind).blurb}</p>
           </div>
 
           {mode === "one" ? (

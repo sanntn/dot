@@ -72,10 +72,12 @@ if (process.env.DOT_AGENT_SANDBOX?.trim() === "on") setSandbox(sandboxSettings(g
 if (isolated) process.umask(0o077);
 const worktreesDir = resolve(dataDir, "worktrees");
 const reposDir = resolve(dataDir, "repos");
+const workspacesDir = resolve(dataDir, "workspaces");
 const backupsDir = resolve(dataDir, "backups");
 if (isolated) {
   agentDir(worktreesDir);
   agentDir(reposDir);
+  agentDir(workspacesDir);
   configureTransport(resolve(dataDir, "transport"));
 }
 
@@ -131,6 +133,9 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 const api = createApp(store, bus, orchestrator, {
   attachmentsDir: resolve(dataDir, "attachments"),
   reposDir,
+  workspacesDir,
+  // In the Docker image each folder is handed to the agent user, so its agents can work in it.
+  prepareAgentFolder: isolated ? agentDir : undefined,
   storage: { worktreesDir, dbFile, backupsDir, attachmentsDir: resolve(dataDir, "attachments") },
   auth,
   allowedHosts: (process.env.DOT_ALLOWED_HOSTS ?? "")

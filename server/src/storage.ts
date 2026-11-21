@@ -122,6 +122,6 @@ export async function cleanStorage(store: Store, paths: StoragePaths): Promise<{
     freedBytes += bytes;
   }
   // Forget the registrations of folders that are gone.
-  for (const project of store.listProjects()) await gitOk(project.repoPath, ["worktree", "prune"]);
+  for (const project of store.listProjects()) if (project.kind === "repo") await gitOk(project.repoPath, ["worktree", "prune"]);
   return { removed, freedBytes };
 }
