@@ -203,7 +203,7 @@ function SubtaskSuggestion({ plan, busy, onSplit }: { plan: Plan; busy: boolean;
         <p className="text-sm text-destructive">This split cannot be applied: {problem}. Ask the researcher to fix it, or approve the plan as one task.</p>
       ) : (
         <div className="flex items-center gap-3">
-          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onSplit}>
+          <Button type="button" size="sm" variant="outline" loading={busy} onClick={onSplit}>
             <Split aria-hidden="true" />
             Split into {subtasks.length} tasks
           </Button>
@@ -381,7 +381,7 @@ function PlanEditor(props: {
           <Button type="button" variant="outline" onClick={props.onCancel}>
             Cancel
           </Button>
-          <Button type="submit" disabled={props.busy}>
+          <Button type="submit" disabled={props.busy} loading={props.busy}>
             Save as new version
           </Button>
         </div>

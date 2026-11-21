@@ -298,7 +298,7 @@ export function TaskDialog(props: {
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" disabled={busy || (mode === "list" && parsed.titles.length === 0)}>
+            <Button type="submit" disabled={mode === "list" && parsed.titles.length === 0} loading={busy}>
               {mode === "list" ? "Add tasks" : "Create task"}
             </Button>
           </DialogFooter>

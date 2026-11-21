@@ -211,7 +211,7 @@ export function SchedulesSection({ projectId, projectKind, taskBudgetUsd = null 
             </div>
           )}
           <div className="flex gap-2">
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy} loading={busy}>
               Add schedule
             </Button>
             <Button type="button" variant="ghost" onClick={() => setAdding(false)}>

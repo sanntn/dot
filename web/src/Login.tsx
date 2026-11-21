@@ -56,7 +56,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy} loading={busy}>
           Sign in
         </Button>
       </form>

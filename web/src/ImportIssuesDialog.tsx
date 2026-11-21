@@ -175,7 +175,7 @@ export function ImportIssuesDialog(props: { project: Project; onClose: () => voi
             <Checkbox id={`${id}-start`} checked={start} onCheckedChange={(v) => setStart(v === true)} />
             <Label htmlFor={`${id}-start`}>Start research right away</Label>
           </div>
-          <Button disabled={busy || picked.length === 0} onClick={() => void onImport()}>
+          <Button disabled={picked.length === 0} loading={busy} onClick={() => void onImport()}>
             {picked.length === 0 ? "Import" : `Import ${picked.length} ${picked.length === 1 ? "issue" : "issues"}`}
           </Button>
         </DialogFooter>

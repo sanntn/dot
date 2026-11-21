@@ -74,7 +74,9 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   const [reportVersion, setReportVersion] = useState<number | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // The action in flight, so only its own button shows a spinner while all of them are disabled.
+  const [pending, setPending] = useState<string | null>(null);
+  const busy = pending !== null;
 
   // Plan and runs are small and change rarely. Messages grow, so fetch only the ones after the last seen id.
   const lastMessageId = useRef(0);
@@ -146,17 +148,26 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
     });
   }, [loadMessages, loadMeta, task.id, task.projectId]);
 
-  async function act(action: () => Promise<unknown>) {
-    setBusy(true);
+  async function act(key: string, action: () => Promise<unknown>) {
+    setPending(key);
     setError(null);
     try {
       await action();
     } catch (err) {
       setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
+
+  // A preview runs in the background for up to a minute. It is over once a picture, an error or a stop notice follows its start notice.
+  const previewing = useMemo(() => {
+    const start = messages.findLastIndex((m) => m.text === "Starting the dev server for a preview.");
+    if (start === -1) return false;
+    return !messages
+      .slice(start + 1)
+      .some((m) => m.kind === "error" || m.text === "The preview was stopped." || (m.data?.attachments?.length ?? 0) > 0);
+  }, [messages]);
 
   // Files whose changes the Changes tab can't show in full (cut off, or binary). Approving the merge
   // asks for a second click while any exist, so a padded diff can't slip a change past you.
@@ -264,30 +275,36 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
           </DialogDescription>
           <div className="flex flex-wrap gap-2 pt-1">
             {startLabel && (
-              <Button size="sm" onClick={() => void act(() => api.startTask(task.id))}>
+              <Button size="sm" loading={pending === "start"} onClick={() => void act("start", () => api.startTask(task.id))}>
                 <Play aria-hidden="true" />
                 {startLabel}
               </Button>
             )}
             {task.column === "merge_approval" && !working && (
-              <Button size="sm" disabled={busy} onClick={() => void act(() => approveMerge())}>
+              <Button size="sm" disabled={busy} loading={pending === "merge"} onClick={() => void act("merge", () => approveMerge())}>
                 <GitMerge aria-hidden="true" />
                 Merge
               </Button>
             )}
             {task.column === "merge_approval" && !working && isCode && (
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.startPreview(task.id))}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                loading={pending === "preview" || previewing}
+                onClick={() => void act("preview", () => api.startPreview(task.id))}
+              >
                 <Camera aria-hidden="true" />
-                Preview
+                {previewing ? "Previewing" : "Preview"}
               </Button>
             )}
             {task.column === "merge" && !working && (
               <>
-                <Button size="sm" disabled={busy} onClick={() => void act(() => api.merge(task.id))}>
+                <Button size="sm" disabled={busy} loading={pending === "retry-merge"} onClick={() => void act("retry-merge", () => api.merge(task.id))}>
                   <GitMerge aria-hidden="true" />
                   Retry merge
                 </Button>
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.merge(task.id, true))}>
+                <Button size="sm" variant="outline" disabled={busy} loading={pending === "merge-no-ci"} onClick={() => void act("merge-no-ci", () => api.merge(task.id, true))}>
                   Merge without CI
                 </Button>
               </>
@@ -328,7 +345,8 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                       size="sm"
                       variant="outline"
                       disabled={busy}
-                      onClick={() => void act(() => api.retryStage(task.id, s))}
+                      loading={pending === `retry-${s}`}
+                      onClick={() => void act(`retry-${s}`, () => api.retryStage(task.id, s))}
                     >
                       {stageLabel(task.kind, s)}
                     </Button>
@@ -343,7 +361,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               </a>
             </Button>
             {working && (
-              <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.stopTask(task.id))}>
+              <Button size="sm" variant="outline" disabled={busy} loading={pending === "stop"} onClick={() => void act("stop", () => api.stopTask(task.id))}>
                 <Square aria-hidden="true" />
                 {task.column === "merge" ? "Stop merge" : "Stop agent"}
               </Button>
@@ -368,7 +386,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                   {unseenFiles.length > 10 && <li>and {unseenFiles.length - 10} more</li>}
                 </ul>
                 <div className="flex gap-2">
-                  <Button size="sm" disabled={busy} onClick={() => void act(() => approveMerge(true))}>
+                  <Button size="sm" disabled={busy} loading={pending === "merge"} onClick={() => void act("merge", () => approveMerge(true))}>
                     Merge anyway
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setUnseenFiles(null)}>
@@ -565,7 +583,7 @@ function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; on
         <span className="flex-1 text-right text-sm text-muted-foreground" role="status">
           {saved ? "Saved." : ""}
         </span>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" disabled={busy} loading={busy}>
           Save
         </Button>
       </div>

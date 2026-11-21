@@ -408,7 +408,7 @@ export function ProjectDialog(props: {
                 </Button>
               </DialogClose>
             )}
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy} loading={busy}>
               {notice ? "Done" : project ? "Save" : "Add project"}
             </Button>
           </DialogFooter>

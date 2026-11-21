@@ -198,7 +198,7 @@ export function ChangesPanel({ task, active, version }: { task: Task; active: bo
             {comments.length} {comments.length === 1 ? "comment" : "comments"}
           </span>
           {canComment ? (
-            <Button size="sm" disabled={sending} onClick={() => void sendComments()}>
+            <Button size="sm" loading={sending} onClick={() => void sendComments()}>
               <Send aria-hidden="true" />
               Send to the executor
             </Button>

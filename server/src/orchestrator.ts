@@ -852,7 +852,10 @@ ${checksSummary(results)}` });
     void (async () => {
       try {
         const result = await capturePreview(project, worktree, abort.signal);
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted) {
+          this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "The preview was stopped." });
+          return;
+        }
         if (!result.ok) {
           this.store.addMessage({ taskId, runId: null, role: "system", kind: "error", text: `The preview failed.
 
