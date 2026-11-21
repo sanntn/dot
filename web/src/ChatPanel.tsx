@@ -36,11 +36,12 @@ import { api, attachmentUrl, errorMessage } from "./api.ts";
 import { ClampedProse } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
 
-export type ArtifactTab = "plan" | "changes" | "review";
+export type ArtifactTab = "plan" | "report" | "changes" | "review";
 
 // Chat messages that announce an artifact get a card with a button to open its tab.
 const ARTIFACT_CARDS: Partial<Record<ChatKind, { icon: typeof FileText; tab: ArtifactTab; label: string }>> = {
   plan: { icon: FileText, tab: "plan", label: "View plan" },
+  document: { icon: FileText, tab: "report", label: "View report" },
   report: { icon: GitBranch, tab: "changes", label: "View changes" },
   review: { icon: ClipboardCheck, tab: "review", label: "View review" },
 };

@@ -466,3 +466,67 @@ test("accepted rules reach the agents, and a review's lessons wait as suggestion
   // Removing a rule keeps it dismissed, so the reviewer can't bring it back.
   assert.equal(h.store.addRule(projectId, "use the shared API client,  not fetch.", "suggested"), null);
 });
+
+const reportDoc = (headline: string) => ({
+  headline,
+  summary: "Two options were compared.",
+  body: "## Findings\n\nOption A is cheaper.",
+  sources: [{ title: "Pricing page", url: "https://example.com/pricing", note: "Monthly prices" }],
+  openQuestions: ["Does A support SSO?"],
+});
+
+async function waitFor(what: string, check: () => boolean, ms = 15_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) assert.fail(`Timed out waiting for ${what}.`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+test("a report task goes from the inbox to done through one agent and your approval", async () => {
+  const h = await harness([
+    {
+      name: "reporter",
+      turns: [
+        [{ say: "Reading." }, { tool: "submit_report", args: reportDoc("A is cheaper than B.") }],
+        [{ tool: "submit_report", args: reportDoc("A is cheaper and has SSO.") }],
+      ],
+    },
+    { name: "reporter again", turns: [[{ tool: "submit_report", args: reportDoc("A is cheaper and has SSO.") }]] },
+  ]);
+  const task = h.store.createTask({ projectId: h.task.projectId, title: "Compare A and B", description: "Which is cheaper?", kind: "report", blockedBy: [] });
+  const idle = () => {
+    const t = h.store.getTask(task.id);
+    return t.agentState !== "running" && t.agentState !== "queued";
+  };
+
+  h.orchestrator.startResearch(task.id);
+  await waitFor("report review", () => h.store.getTask(task.id).column === "report_review" && idle());
+  assert.equal(h.store.latestReportDoc(task.id)?.report.headline, "A is cheaper than B.");
+  // It waits for you, and nothing was branched.
+  assert.equal(h.store.getTask(task.id).branch, null);
+  const first = h.calls().find((c) => "prompt" in c)!;
+  assert.match(String(first.prompt), /submit_report/);
+
+  // Sending it back resumes the agent, and a second version arrives.
+  h.orchestrator.sendBackReportDoc(task.id, "Check SSO support.");
+  await waitFor("revised report", () => h.store.latestReportDoc(task.id)?.version === 2);
+  await waitFor("report review again", () => h.store.getTask(task.id).column === "report_review" && idle());
+  assert.equal(h.store.latestReportDoc(task.id)?.report.headline, "A is cheaper and has SSO.");
+
+  h.orchestrator.approveReportDoc(task.id);
+  assert.equal(h.store.getTask(task.id).column, "done");
+
+  const markdown = taskMarkdown(h.store, task.id);
+  assert.match(markdown, /## Report \(version 2\)/);
+  assert.match(markdown, /\[Pricing page\]\(https:\/\/example\.com\/pricing\): Monthly prices/);
+  assert.match(markdown, /### Open questions/);
+});
+
+test("a report task has no plan or execution stage", async () => {
+  const h = await harness([]);
+  const task = h.store.createTask({ projectId: h.task.projectId, title: "Compare", description: "", kind: "report", blockedBy: [] });
+  await assert.rejects(() => h.orchestrator.approvePlan(task.id), /Plan review/);
+  await assert.rejects(() => h.orchestrator.startExecution(task.id), /Execute/);
+  assert.throws(() => h.orchestrator.approveReportDoc(task.id), /Report review/);
+});

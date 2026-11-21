@@ -55,7 +55,9 @@ export function statusLine(task: Task): string | null {
   if (task.agentState === "queued") return "Waiting for a free agent slot";
   switch (task.column) {
     case "research":
-      return task.agentState === "running" ? "Reading the codebase" : null;
+      return task.agentState === "running" ? (task.kind === "report" ? "Researching" : "Reading the codebase") : null;
+    case "report_review":
+      return "Report ready for you to read";
     case "plan_review":
       return "Plan ready for you to review";
     case "execute":

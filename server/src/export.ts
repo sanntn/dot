@@ -1,4 +1,4 @@
-import { COLUMN_LABELS, planHeadline, reportHeadline } from "@dot/shared";
+import { COLUMN_LABELS, planHeadline, reportDocHeadline, reportHeadline } from "@dot/shared";
 import type { Store } from "./store.ts";
 
 // A task as one Markdown document: what was asked, the latest plan, report and review, and the history.
@@ -17,6 +17,7 @@ export function taskMarkdown(store: Store, taskId: number): string {
   const plan = store.latestPlan(taskId);
   const report = store.latestExecutionReport(taskId);
   const review = store.latestReview(taskId);
+  const doc = store.latestReportDoc(taskId);
 
   const facts = [
     `- Project: ${project.name}`,
@@ -28,6 +29,26 @@ export function taskMarkdown(store: Store, taskId: number): string {
   ].filter(Boolean);
 
   const parts = [`# #${task.number} ${task.title}\n\n${facts.join("\n")}\n`, section("Request", task.description)];
+
+  if (doc) {
+    const d = doc.report;
+    parts.push(
+      section(
+        `Report (version ${doc.version})`,
+        [
+          `**${reportDocHeadline(d)}**`,
+          d.summary,
+          d.body,
+          d.sources.length > 0
+            ? `### Sources\n\n${bullets(d.sources.map((s) => [s.url ? `[${s.title}](${s.url})` : s.title, s.note].filter(Boolean).join(": ")))}`
+            : "",
+          d.openQuestions.length > 0 ? `### Open questions\n\n${bullets(d.openQuestions)}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      ),
+    );
+  }
 
   if (plan) {
     const p = plan.plan;

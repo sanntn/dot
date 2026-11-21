@@ -57,6 +57,7 @@ const HIT_KINDS: Record<SearchHit["kind"], string> = {
   message: "Chat",
   plan: "Plan",
   report: "Report",
+  document: "Report",
   review: "Review",
 };
 

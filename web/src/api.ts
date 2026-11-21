@@ -17,6 +17,7 @@ import type {
   SearchHit,
   ProjectPatch,
   RemoteInfo,
+  ReportDocArtifact,
   ReviewArtifact,
   Run,
   SendMessage,
@@ -121,6 +122,9 @@ export const api = {
     request<{ task: Task; plan: PlanArtifact }>(`/tasks/${id}/plan/split`, "POST", { title, steps }),
   approvePlan: (id: number) => request<Task>(`/tasks/${id}/plan/approve`, "POST"),
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
+  getReportDoc: (id: number) => request<ReportDocArtifact | null>(`/tasks/${id}/doc`),
+  approveReportDoc: (id: number) => request<Task>(`/tasks/${id}/doc/approve`, "POST"),
+  sendBackReportDoc: (id: number, notes: string) => request<Task>(`/tasks/${id}/doc/send-back`, "POST", { notes }),
 
   // kind "task" images go to the researcher with the task's brief. Chat images (the default) go with a message.
   listTaskImages: (taskId: number) => request<AttachmentRef[]>(`/tasks/${taskId}/attachments`),

@@ -184,6 +184,11 @@ export function App() {
   const approveFocused = useCallback(
     (id: number) => {
       const task = tasksRef.current.find((t) => t.id === id);
+      if (task?.column === "report_review") {
+        void act(() => api.approveReportDoc(id));
+        announce(`Approved the report for ${task.title}.`);
+        return;
+      }
       if (task?.column !== "plan_review") return;
       void act(() => api.approvePlan(id));
       announce(`Approved the plan for ${task.title}.`);

@@ -11,7 +11,9 @@ import {
   laneOf,
   type Lane,
   type ProjectOverview,
+  COLUMN_LABELS,
   DEFAULT_KIND,
+  KINDS,
   MAX_IMAGE_BYTES,
   MergeSchema,
   PlanSplitSchema,
@@ -439,7 +441,12 @@ export function createApp(
   });
 
   app.post("/tasks/:id/move", async (c) => {
-    const task = store.moveTask(idParam(c), await parseBody(c, TaskMoveSchema));
+    const move = await parseBody(c, TaskMoveSchema);
+    const current = store.getTask(idParam(c));
+    if (!KINDS[current.kind].columns.includes(move.column)) {
+      throw new HttpError(400, `A ${KINDS[current.kind].label.toLowerCase()} task has no ${COLUMN_LABELS[move.column]} column`);
+    }
+    const task = store.moveTask(current.id, move);
     bus.publish({ type: "tasks.changed", projectId: task.projectId, taskId: task.id });
     return c.json(task);
   });
@@ -570,6 +577,14 @@ export function createApp(
   });
 
   app.post("/tasks/:id/plan/approve", async (c) => c.json(await orchestrator.approvePlan(idParam(c))));
+
+  // A report task's document. Approving finishes the task.
+  app.get("/tasks/:id/doc", (c) => c.json(store.latestReportDoc(idParam(c))));
+  app.post("/tasks/:id/doc/approve", (c) => c.json(orchestrator.approveReportDoc(idParam(c))));
+  app.post("/tasks/:id/doc/send-back", async (c) => {
+    const { notes } = await parseBody(c, SendBackSchema);
+    return c.json(orchestrator.sendBackReportDoc(idParam(c), notes));
+  });
 
   app.post("/tasks/:id/plan/send-back", async (c) => {
     const { notes } = await parseBody(c, SendBackSchema);

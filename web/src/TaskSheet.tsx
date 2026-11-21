@@ -1,12 +1,13 @@
 import {
   AGENT_STAGES,
   COLUMN_LABELS,
-  COLUMNS,
+  KINDS,
   STAGE_LABELS,
   type AgentStage,
   type ChatMessage,
   type Column,
   type PlanArtifact,
+  type ReportDocArtifact,
   type ReviewArtifact,
   type Run,
   type Task,
@@ -31,16 +32,18 @@ import { ChatPanel } from "./ChatPanel.tsx";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import { serialLoader, subscribe } from "./events.ts";
 import { PlanPanel } from "./PlanPanel.tsx";
+import { ReportPanel } from "./ReportPanel.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { TaskFields } from "./TaskDialog.tsx";
 import { TaskImages } from "./TaskImages.tsx";
 
-type Tab = "chat" | "plan" | "changes" | "review" | "activity" | "details";
+type Tab = "chat" | "plan" | "report" | "changes" | "review" | "activity" | "details";
 
 // Which agent belongs to a column. Columns without an agent map to nothing.
 const COLUMN_STAGE: Partial<Record<Column, AgentStage>> = {
   research: "research",
   plan_review: "research",
+  report_review: "research",
   execute: "execute",
   review: "review",
   merge_approval: "review",
@@ -49,6 +52,7 @@ const COLUMN_STAGE: Partial<Record<Column, AgentStage>> = {
 // Open on what the task is waiting for: the plan in Plan review, the review once there is one.
 function initialTab(task: Task): Tab {
   if (task.column === "plan_review") return "plan";
+  if (task.column === "report_review") return "report";
   if (task.column === "merge_approval" || (task.column === "review" && task.needsInput)) return "review";
   if (task.column === "merge") return "chat";
   return "chat";
@@ -60,6 +64,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   const [tab, setTab] = useState<Tab>(() => initialTab(task));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [plan, setPlan] = useState<PlanArtifact | null>(null);
+  const [doc, setDoc] = useState<ReportDocArtifact | null>(null);
   const [review, setReview] = useState<ReviewArtifact | null>(null);
   const [reportVersion, setReportVersion] = useState<number | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -69,16 +74,19 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   // Plan and runs are small and change rarely. Messages grow, so fetch only the ones after the last seen id.
   const lastMessageId = useRef(0);
 
+  const isReport = task.kind === "report";
   const loadMeta = useMemo(
     () =>
       serialLoader(async () => {
         try {
-          const [p, rv, rp, r] = await Promise.all([
-            api.getPlan(task.id),
-            api.getReview(task.id),
-            api.getReport(task.id),
+          const [p, rv, rp, r, d] = await Promise.all([
+            isReport ? Promise.resolve(null) : api.getPlan(task.id),
+            isReport ? Promise.resolve(null) : api.getReview(task.id),
+            isReport ? Promise.resolve(null) : api.getReport(task.id),
             api.listRuns(task.id),
+            isReport ? api.getReportDoc(task.id) : Promise.resolve(null),
           ]);
+          setDoc(d);
           setPlan(p);
           setReview(rv);
           setReportVersion(rp?.version ?? null);
@@ -87,7 +95,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
           setError(errorMessage(err));
         }
       }),
-    [task.id],
+    [task.id, isReport],
   );
 
   const loadMessages = useMemo(
@@ -197,7 +205,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               : null;
   const canRetry =
     !busy && stagesWithRuns.length > 0 && task.column !== "inbox" && task.column !== "done" && !(task.column === "merge" && working);
-  const showReviewTab =review !== null || task.column === "review" || task.column === "merge_approval";
+  const showReviewTab = !isReport && (review !== null || task.column === "review" || task.column === "merge_approval");
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -211,6 +219,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
             <div className="flex flex-wrap items-center gap-2">
               <span className="tabular-nums">#{task.number}</span>
               <Badge variant="outline">{COLUMN_LABELS[task.column]}</Badge>
+              {task.kind !== "code" && <Badge variant="secondary">{KINDS[task.kind].label}</Badge>}
               <AgentBadge task={task} />
               {cost > 0 && (
                 <span className="text-xs" title="What this usage would cost at API prices. Your subscription covers it.">
@@ -253,6 +262,12 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                   Merge without CI
                 </Button>
               </>
+            )}
+            {task.column === "report_review" && tab !== "report" && (
+              <Button size="sm" onClick={() => setTab("report")}>
+                <FileText aria-hidden="true" />
+                Read report
+              </Button>
             )}
             {task.column === "plan_review" && tab !== "plan" && (
               <Button size="sm" onClick={() => setTab("plan")}>
@@ -333,7 +348,11 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-4 mt-3">
             <TabsTrigger value="chat">Chat</TabsTrigger>
-            <TabsTrigger value="plan">Plan{plan ? ` v${plan.version}` : ""}</TabsTrigger>
+            {isReport ? (
+              <TabsTrigger value="report">Report{doc ? ` v${doc.version}` : ""}</TabsTrigger>
+            ) : (
+              <TabsTrigger value="plan">Plan{plan ? ` v${plan.version}` : ""}</TabsTrigger>
+            )}
             {task.branch && <TabsTrigger value="changes">Changes</TabsTrigger>}
             {showReviewTab && <TabsTrigger value="review">Review{review ? ` ${review.version}` : ""}</TabsTrigger>}
             <TabsTrigger value="activity">Activity</TabsTrigger>
@@ -377,9 +396,15 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               <ChangesPanel task={task} active={tab === "changes"} version={messages.length + runs.length} />
             )}
           </TabsContent>
-          <TabsContent value="plan" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
-            <PlanPanel task={task} artifact={plan} />
-          </TabsContent>
+          {isReport ? (
+            <TabsContent value="report" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+              <ReportPanel task={task} artifact={doc} />
+            </TabsContent>
+          ) : (
+            <TabsContent value="plan" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+              <PlanPanel task={task} artifact={plan} />
+            </TabsContent>
+          )}
           <TabsContent value="activity" className="min-h-0 flex-1 overflow-y-auto">
             <ActivityPanel taskId={task.id} runs={runs} messages={messages} />
           </TabsContent>
@@ -476,7 +501,7 @@ function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; on
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {COLUMNS.map((c) => (
+            {KINDS[task.kind].columns.map((c) => (
               <SelectItem key={c} value={c}>
                 {COLUMN_LABELS[c]}
               </SelectItem>

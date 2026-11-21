@@ -1,4 +1,4 @@
-import { IMAGE_TYPES, MAX_BATCH, type Task, type TaskTemplate } from "@dot/shared";
+import { DEFAULT_KIND, IMAGE_TYPES, KINDS, MAX_BATCH, TASK_KINDS, type Task, type TaskKind, type TaskTemplate } from "@dot/shared";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,7 @@ export function TaskDialog(props: {
   const [fill, setFill] = useState({ n: 0, title: "", description: "" });
   const [blockers, setBlockers] = useState<number[]>([]);
   const [autoStart, setAutoStart] = useState(false);
+  const [kind, setKind] = useState<TaskKind>(DEFAULT_KIND);
   const [images, setImages] = useState<File[]>([]);
   const [list, setList] = useState("");
   const [templateName, setTemplateName] = useState("");
@@ -119,6 +120,7 @@ export function TaskDialog(props: {
           projectId: props.projectId,
           title: String(form.get("title") ?? ""),
           description: String(form.get("description") ?? ""),
+          kind,
           blockedBy: blockers,
           autoStart: autoStart && blockers.length > 0,
         });
@@ -158,6 +160,23 @@ export function TaskDialog(props: {
 
           {mode === "one" ? (
             <>
+              <div className="grid gap-2">
+                <Label htmlFor={`${id}-kind`}>Kind</Label>
+                <Select value={kind} onValueChange={(v) => setKind(v as TaskKind)}>
+                  <SelectTrigger id={`${id}-kind`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TASK_KINDS.map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {KINDS[k].label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{KINDS[kind].blurb}</p>
+              </div>
+
               {templates.length > 0 && (
                 <div className="grid gap-2">
                   <Label htmlFor={`${id}-template`}>Template</Label>
@@ -183,7 +202,7 @@ export function TaskDialog(props: {
                 </div>
               )}
 
-              <TaskFields key={fill.n} id={id} title={fill.title} description={fill.description} />
+              <TaskFields key={fill.n} id={id} title={fill.title} description={fill.description} kind={kind} />
 
               <BlockerPicker candidates={openTasks} value={blockers} onChange={setBlockers} autoStart={autoStart} onAutoStart={setAutoStart} />
 
@@ -286,7 +305,7 @@ export function TaskDialog(props: {
   );
 }
 
-export function TaskFields(props: { id: string; title?: string; description?: string }) {
+export function TaskFields(props: { id: string; title?: string; description?: string; kind?: TaskKind }) {
   return (
     <>
       <div className="grid gap-2">
@@ -301,7 +320,11 @@ export function TaskFields(props: { id: string; title?: string; description?: st
           rows={8}
           maxLength={20000}
           defaultValue={props.description}
-          placeholder="What should be done, and why. The research agent starts from this."
+          placeholder={
+            props.kind === "report"
+              ? "The question to answer, what you will use the answer for, and anything to skip."
+              : "What should be done, and why. The research agent starts from this."
+          }
           className="max-h-80"
         />
       </div>

@@ -2,6 +2,7 @@ import {
   ExecutionReportSchema,
   MAX_REVIEW_ROUNDS,
   PlanSchema,
+  ReportDocSchema,
   ReviewSchema,
   type Run,
 } from "@dot/shared";
@@ -78,6 +79,34 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
       publish(run.taskId);
       return {
         text: `Plan saved as version ${saved.version} and sent to the user for review. End your turn now with a short summary of the plan.`,
+      };
+    },
+  });
+
+  const submitReport = defineTool({
+    name: "submit_report",
+    description:
+      "Submit the finished report for the user to read. Each call saves a new version. Works while the report is in Research or waiting for review.",
+    schema: ReportDocSchema,
+    handler: (report) => {
+      const task = store.getTask(run.taskId);
+      if (task.column !== "research" && task.column !== "report_review") {
+        return { text: "The report is already approved and can no longer change.", isError: true };
+      }
+      const saved = store.addReportDoc(run.taskId, runId, "agent", report);
+      store.addMessage({
+        taskId: run.taskId,
+        runId,
+        role: "agent",
+        kind: "document",
+        text: `Submitted report v${saved.version}: ${report.headline}`,
+        data: { reportVersion: saved.version },
+      });
+      if (task.column === "research") store.moveTask(task.id, { column: "report_review", beforeTaskId: null });
+      live.outcome = true;
+      publish(run.taskId);
+      return {
+        text: `Report saved as version ${saved.version} and sent to the user. End your turn now with a short summary of what you found.`,
       };
     },
   });
@@ -219,7 +248,7 @@ export function agentTools({ store, publish }: ToolDeps, run: Run, live: ToolSta
     },
   });
 
-  if (run.stage === "research") return [askHuman, submitPlan];
+  if (run.stage === "research") return [askHuman, store.getTask(run.taskId).kind === "report" ? submitReport : submitPlan];
   if (run.stage === "execute") return [askHuman, submitExecutionReport];
   return [askHuman, submitReview];
 }

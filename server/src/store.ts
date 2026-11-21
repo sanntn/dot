@@ -7,6 +7,8 @@ import type {
   ChatMessage,
   ChatRole,
   Column,
+  ReportDoc,
+  ReportDocArtifact,
   TaskKind,
   Commit,
   ExecutionArtifact,
@@ -584,6 +586,16 @@ export class Store {
   latestPlan(taskId: number): PlanArtifact | null {
     const a = this.latestArtifact(taskId, "plan");
     return a && { version: a.version, author: a.author, plan: a.payload as Plan, createdAt: a.createdAt };
+  }
+
+  addReportDoc(taskId: number, runId: number | null, author: "agent" | "user", report: ReportDoc): ReportDocArtifact {
+    this.addArtifact(taskId, runId, "document", author, report);
+    return this.latestReportDoc(taskId)!;
+  }
+
+  latestReportDoc(taskId: number): ReportDocArtifact | null {
+    const a = this.latestArtifact(taskId, "document");
+    return a && { version: a.version, author: a.author, report: a.payload as ReportDoc, createdAt: a.createdAt };
   }
 
   addReview(taskId: number, runId: number, round: number, reportVersion: number, review: Review): ReviewArtifact {

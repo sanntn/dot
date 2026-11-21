@@ -310,6 +310,21 @@ const MIGRATIONS: string[] = [
   -- What the task is for. It picks the columns, stages and gates the task goes through. Existing tasks are code changes.
   ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'code';
   `,
+  `
+  -- Report tasks save their output as 'document' artifacts. Search them like plans and reviews.
+  DROP TRIGGER search_artifact_insert;
+  CREATE TRIGGER search_artifact_insert AFTER INSERT ON artifacts
+    WHEN new.type IN ('plan', 'execution_report', 'review', 'document')
+  BEGIN
+    INSERT INTO search (rowid, kind, task_id, body)
+    VALUES (
+      new.id * 4 + 2,
+      CASE new.type WHEN 'execution_report' THEN 'report' ELSE new.type END,
+      new.task_id,
+      (SELECT group_concat(value, char(10)) FROM json_tree(new.payload) WHERE type = 'text')
+    );
+  END;
+  `,
 ];
 
 export type Db = DatabaseSync;

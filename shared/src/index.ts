@@ -8,6 +8,7 @@ export const COLUMNS = [
   "inbox",
   "research",
   "plan_review",
+  "report_review",
   "execute",
   "review",
   "merge_approval",
@@ -22,6 +23,7 @@ export const COLUMN_LABELS: Record<Column, string> = {
   inbox: "Inbox",
   research: "Research",
   plan_review: "Plan review",
+  report_review: "Report review",
   execute: "Execute",
   review: "Review",
   merge_approval: "Merge approval",
@@ -250,7 +252,7 @@ export type SearchHit = {
   title: string;
   column: Column;
   // Where the match was found.
-  kind: "task" | "message" | "plan" | "report" | "review";
+  kind: "task" | "message" | "plan" | "report" | "review" | "document";
   snippet: string;
 };
 
@@ -362,6 +364,36 @@ export type PlanArtifact = {
   version: number;
   author: "agent" | "user";
   plan: Plan;
+  createdAt: string;
+};
+
+// The output of a report task: a document to read, with the sources it rests on.
+export const ReportDocSchema = z.object({
+  headline: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .describe("The answer or main finding in one plain sentence, under 160 characters. The board shows it first."),
+  summary: z.string().trim().min(1).describe("Two to four sentences a busy reader can stop at."),
+  body: z.string().trim().min(1).describe("The full report in Markdown. Use headings and keep claims next to their sources."),
+  sources: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1),
+        url: z.string().trim().max(2000).optional().describe("A web address, or a repository path for a file you read."),
+        note: z.string().trim().optional().describe("What this source supports."),
+      }),
+    )
+    .describe("Everything the report relies on."),
+  openQuestions: z.array(z.string().trim().min(1)).describe("What you could not settle, so the reader knows what to check."),
+});
+export type ReportDoc = z.infer<typeof ReportDocSchema>;
+
+export type ReportDocArtifact = {
+  version: number;
+  author: "agent" | "user";
+  report: ReportDoc;
   createdAt: string;
 };
 
@@ -527,7 +559,7 @@ export type Run = {
 export type AttachmentRef = { id: number; fileName: string; mediaType: string };
 
 export type ChatRole = "user" | "agent" | "tool" | "system";
-export type ChatKind = "text" | "tool" | "question" | "plan" | "report" | "review" | "error" | "status";
+export type ChatKind = "text" | "tool" | "question" | "plan" | "document" | "report" | "review" | "error" | "status";
 
 export type ChatData = {
   tool?: string;
@@ -598,5 +630,6 @@ export function firstSentence(text: string, max = 160): string {
 // The type says a headline is always there, but rows saved earlier have none.
 type MaybeHeadline = { headline?: string };
 export const planHeadline = (plan: Plan & MaybeHeadline) => plan.headline?.trim() || firstSentence(plan.goal);
+export const reportDocHeadline = (doc: ReportDoc & MaybeHeadline) => doc.headline?.trim() || firstSentence(doc.summary);
 export const reportHeadline = (report: ExecutionReport & MaybeHeadline) => report.headline?.trim() || firstSentence(report.summary);
 export const reviewHeadline = (review: Review & MaybeHeadline) => review.headline?.trim() || firstSentence(review.summary);

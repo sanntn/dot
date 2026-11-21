@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   MAX_REVIEW_ROUNDS,
   KINDS,
+  type TaskKind,
   STAGE_LABELS,
   stageColumn,
   type AgentStage,
@@ -24,6 +25,13 @@ import {
   RESEARCHER_TOOLS,
   researcherBrief,
 } from "./agents/researcher.ts";
+import {
+  REPORTER_ALLOWED_TOOLS,
+  REPORTER_DENIED_TOOLS,
+  REPORTER_SYSTEM_PROMPT,
+  REPORTER_TOOLS,
+  reporterBrief,
+} from "./agents/reporter.ts";
 import {
   EXECUTOR_ALLOWED_TOOLS,
   EXECUTOR_DENIED_TOOLS,
@@ -120,6 +128,28 @@ const STAGE_CONFIG: Record<AgentStage, StageConfig> = {
   },
 };
 
+// The report kind has one agent. It takes the researcher's place and submits a report instead of a plan.
+const REPORT_CONFIG: StageConfig = {
+  tools: REPORTER_TOOLS,
+  allowedTools: REPORTER_ALLOWED_TOOLS,
+  deniedTools: REPORTER_DENIED_TOOLS,
+  systemPrompt: REPORTER_SYSTEM_PROMPT,
+  nudge:
+    "You ended your turn without calling submit_report or ask_human. Continue the research. " +
+    "When you are ready, call submit_report. If you need a decision from the user, call ask_human.",
+  stalled: "The report agent stopped without a report or a question. Reply here to tell it how to continue.",
+};
+
+// The stage's settings for a kind of task.
+function stageConfig(kind: TaskKind, stage: AgentStage): StageConfig {
+  return kind === "report" && stage === "research" ? REPORT_CONFIG : STAGE_CONFIG[stage];
+}
+
+// What a research-stage agent reads first, by kind.
+function researchBrief(task: Task, project: Project, rules: string[]): string {
+  return task.kind === "report" ? reporterBrief(task, project) : researcherBrief(task, project, rules);
+}
+
 // In-memory state for a run while Dot is up. The database holds everything that must survive a restart.
 type Live = {
   runId: number;
@@ -210,7 +240,7 @@ export class Orchestrator {
     this.store.setNeedsInput(task.id, false);
     const run = this.store.createRun(task.id, "research", randomUUID());
     this.store.addMessage({ taskId: task.id, runId: run.id, role: "system", kind: "status", text: note });
-    this.dispatch(run.id, buildContent(researcherBrief(task, project, this.store.activeRules(project.id)), this.store.taskAttachments(task.id)), true);
+    this.dispatch(run.id, buildContent(researchBrief(task, project, this.store.activeRules(project.id)), this.store.taskAttachments(task.id)), true);
     this.publish(task.id);
     return this.store.getTask(task.id);
   }
@@ -258,8 +288,8 @@ export class Orchestrator {
     this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Researcher resumed." });
     const content: ContentBlock[] = run.sessionStarted
-      ? [{ type: "text", text: "Continue the research. When you are ready, call submit_plan. If you need a decision from the user, call ask_human." }]
-      : buildContent(researcherBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
+      ? [{ type: "text", text: `Continue the research. When you are ready, call ${task.kind === "report" ? "submit_report" : "submit_plan"}. If you need a decision from the user, call ask_human.` }]
+      : buildContent(researchBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
     this.dispatch(run.id, content, true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -574,6 +604,35 @@ ${checksSummary(results)}` });
     this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
     this.store.addMessage({ taskId, runId: run.id, role: "user", kind: "text", text: `Sent the plan back:\n\n${notes}` });
     const prompt = `The user sent the plan back for changes:\n\n${notes}\n\nRevise the plan and submit it again with submit_plan.`;
+    this.dispatch(run.id, [{ type: "text", text: prompt }], true);
+    this.publish(taskId);
+    return this.store.getTask(taskId);
+  }
+
+  // A report task: you read the report and approve it, which finishes the task.
+  approveReportDoc(taskId: number): Task {
+    const task = this.store.getTask(taskId);
+    if (task.kind !== "report" || task.column !== "report_review") {
+      throw new HttpError(409, "Only a report in Report review can be approved");
+    }
+    const doc = this.store.latestReportDoc(taskId);
+    if (!doc) throw new HttpError(409, "This task has no report yet");
+    this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
+    this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: `Report v${doc.version} approved.` });
+    this.publish(taskId);
+    return this.store.getTask(taskId);
+  }
+
+  sendBackReportDoc(taskId: number, notes: string): Task {
+    const task = this.store.getTask(taskId);
+    if (task.kind !== "report" || task.column !== "report_review") {
+      throw new HttpError(409, "Only a report in Report review can be sent back");
+    }
+    const run = this.store.latestRun(taskId, "research");
+    if (!run) throw new HttpError(409, "This task has no report agent");
+    this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
+    this.store.addMessage({ taskId, runId: run.id, role: "user", kind: "text", text: `Sent the report back:\n\n${notes}` });
+    const prompt = `The user sent the report back for changes:\n\n${notes}\n\nRevise the report and submit it again with submit_report.`;
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -904,14 +963,14 @@ ${checksSummary(results)}` });
     // That keeps a past-stage agent from touching a worktree another agent is working in.
     const working = task.column === stageColumn(task.kind, run.stage);
     const readOnly: StageConfig = {
-      ...STAGE_CONFIG[run.stage],
+      ...stageConfig(task.kind, run.stage),
       tools: RESEARCHER_TOOLS,
       allowedTools: [...RESEARCHER_ALLOWED_TOOLS.filter((t) => !t.startsWith("mcp__")), "mcp__dot__ask_human"],
       deniedTools: RESEARCHER_DENIED_TOOLS,
     };
     const stage: StageConfig =
       run.stage === "research"
-        ? STAGE_CONFIG.research
+        ? stageConfig(task.kind, "research")
         : !working
           ? readOnly
           : run.stage === "review"
@@ -1128,7 +1187,7 @@ ${checksSummary(results)}` });
     if (!live.nudged) {
       live.nudged = true;
       live.turnsInFlight++;
-      live.process?.send([{ type: "text", text: STAGE_CONFIG[run.stage].nudge }]);
+      live.process?.send([{ type: "text", text: stageConfig(current.kind, run.stage).nudge }]);
       return;
     }
     live.expectOutcome = false;
@@ -1138,7 +1197,7 @@ ${checksSummary(results)}` });
       runId: live.runId,
       role: "system",
       kind: "status",
-      text: STAGE_CONFIG[run.stage].stalled,
+      text: stageConfig(current.kind, run.stage).stalled,
     });
     this.publish(live.taskId);
   }
