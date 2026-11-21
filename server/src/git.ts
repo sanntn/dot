@@ -393,7 +393,18 @@ export async function pushBranch(repo: string, branch: string, options: { origin
     rmSync(bundle, { force: true });
   }
   const head = (await serverGit(["--git-dir", transport, "rev-parse", `refs/heads/${branch}`])).trim();
-  await serverGit(["--git-dir", transport, "push", options.origin, `refs/heads/${branch}:refs/heads/${branch}`], { network: true });
+  try {
+    await serverGit(["--git-dir", transport, "push", options.origin, `refs/heads/${branch}:refs/heads/${branch}`], { network: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const denied = /Permission to .* denied to (\S+?)\.|error: 403|Authentication failed/i.exec(gitError(err) + "\n" + message);
+    if (!denied) throw err;
+    const who = denied[1] ? ` The token belongs to ${denied[1]}.` : "";
+    throw new Error(
+      `${message}\nGitHub refused the push.${who} That account needs write access to the repository, and DOT_GITHUB_TOKEN needs Contents: Read and write. ` +
+        "For a fine-grained token, the resource owner must be the account or organization that owns the repository. Fix the token, restart Dot, then press Retry merge.",
+    );
+  }
   return head;
 }
 
