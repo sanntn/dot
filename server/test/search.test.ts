@@ -72,3 +72,18 @@ test("a search can be limited to one project", () => {
   assert.equal(s.store.search("invoices").length, 2);
   assert.equal(s.store.search("invoices", { projectId: other.id }).length, 1);
 });
+
+test("finds words inside a report's body and sources", () => {
+  const s = setup();
+  const t = s.store.createTask({ projectId: s.project.id, title: "Compare hosts", description: "", kind: "report", blockedBy: [] });
+  s.store.addReportDoc(t.id, null, "agent", {
+    headline: "Host A wins on price.",
+    summary: "Short.",
+    body: "## Findings\n\nThe vendor offers a nonprofit discount.",
+    sources: [{ title: "Quarterly pricing sheet", url: "https://example.com/p" }],
+    openQuestions: [],
+  });
+  const hits = s.store.search("nonprofit");
+  assert.deepEqual(hits.map((h) => [h.taskId, h.kind]), [[t.id, "document"]]);
+  assert.equal(s.store.search("quarterly")[0]?.taskId, t.id);
+});

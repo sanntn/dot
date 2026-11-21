@@ -113,7 +113,7 @@ export function TaskDialog(props: {
     setError(null);
     try {
       if (mode === "list") {
-        await api.createTasks(props.projectId, parsed.titles);
+        await api.createTasks(props.projectId, parsed.titles, kind);
       } else {
         const form = new FormData(e.currentTarget);
         const task = await api.createTask({
@@ -158,25 +158,25 @@ export function TaskDialog(props: {
             </TabsList>
           </Tabs>
 
+          <div className="grid gap-2">
+            <Label htmlFor={`${id}-kind`}>Kind</Label>
+            <Select value={kind} onValueChange={(v) => setKind(v as TaskKind)}>
+              <SelectTrigger id={`${id}-kind`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TASK_KINDS.map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {KINDS[k].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{KINDS[kind].blurb}</p>
+          </div>
+
           {mode === "one" ? (
             <>
-              <div className="grid gap-2">
-                <Label htmlFor={`${id}-kind`}>Kind</Label>
-                <Select value={kind} onValueChange={(v) => setKind(v as TaskKind)}>
-                  <SelectTrigger id={`${id}-kind`} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TASK_KINDS.map((k) => (
-                      <SelectItem key={k} value={k}>
-                        {KINDS[k].label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">{KINDS[kind].blurb}</p>
-              </div>
-
               {templates.length > 0 && (
                 <div className="grid gap-2">
                   <Label htmlFor={`${id}-template`}>Template</Label>

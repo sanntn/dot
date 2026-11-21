@@ -2,11 +2,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  COLUMN_LABELS,
   MAX_REVIEW_ROUNDS,
-  KINDS,
+  kindDef,
   type TaskKind,
-  STAGE_LABELS,
   stageColumn,
+  stageLabel,
   type AgentStage,
   type ChatMessage,
   type Column,
@@ -84,6 +85,11 @@ export type OrchestratorConfig = {
   checkTimeoutMs?: number;
 };
 
+// Sent when a research-stage turn ends without its submit tool or a question.
+const researchNudge = (submit: string) =>
+  `You ended your turn without calling ${submit} or ask_human. Continue the research. ` +
+  `When you are ready, call ${submit}. If you need a decision from the user, call ask_human.`;
+
 type StageConfig = {
   tools: string[];
   allowedTools: string[];
@@ -100,9 +106,7 @@ const STAGE_CONFIG: Record<AgentStage, StageConfig> = {
     allowedTools: RESEARCHER_ALLOWED_TOOLS,
     deniedTools: RESEARCHER_DENIED_TOOLS,
     systemPrompt: RESEARCHER_SYSTEM_PROMPT,
-    nudge:
-      "You ended your turn without calling submit_plan or ask_human. Continue the research. " +
-      "When you are ready, call submit_plan. If you need a decision from the user, call ask_human.",
+    nudge: researchNudge("submit_plan"),
     stalled: "The researcher stopped without a plan or a question. Reply here to tell it how to continue.",
   },
   execute: {
@@ -134,9 +138,7 @@ const REPORT_CONFIG: StageConfig = {
   allowedTools: REPORTER_ALLOWED_TOOLS,
   deniedTools: REPORTER_DENIED_TOOLS,
   systemPrompt: REPORTER_SYSTEM_PROMPT,
-  nudge:
-    "You ended your turn without calling submit_report or ask_human. Continue the research. " +
-    "When you are ready, call submit_report. If you need a decision from the user, call ask_human.",
+  nudge: researchNudge("submit_report"),
   stalled: "The report agent stopped without a report or a question. Reply here to tell it how to continue.",
 };
 
@@ -252,7 +254,7 @@ export class Orchestrator {
     const task = this.store.getTask(taskId);
     if (task.column === "inbox" || task.column === "done") throw new HttpError(409, "This task has no stage to retry");
     if (this.mergeStep.isRunning(taskId)) throw new HttpError(409, "Stop the merge before retrying a stage");
-    if (!this.store.latestRun(taskId, stage)) throw new HttpError(409, `The ${STAGE_LABELS[stage].toLowerCase()} has not started yet`);
+    if (!this.store.latestRun(taskId, stage)) throw new HttpError(409, `The ${stageLabel(task.kind, stage).toLowerCase()} has not started yet`);
     if (stage === "execute" && !this.store.latestPlan(taskId)) throw new HttpError(409, "This task has no approved plan");
     if (stage === "review" && !this.store.latestExecutionReport(taskId)) throw new HttpError(409, "This task has no execution report to review");
     if (stage !== "research" && (!task.worktreePath || !existsSync(task.worktreePath))) {
@@ -269,9 +271,9 @@ export class Orchestrator {
       this.store.setReviewRound(taskId, Math.max(0, task.reviewRound - 1));
     }
     const stageCol = stageColumn(task.kind, stage);
-    if (!stageCol) throw new HttpError(409, `A ${KINDS[task.kind].label.toLowerCase()} has no ${STAGE_LABELS[stage].toLowerCase()} stage`);
+    if (!stageCol) throw new HttpError(409, `A ${kindDef(task.kind).label.toLowerCase()} has no ${stageLabel(task.kind, stage).toLowerCase()} stage`);
     if (task.column !== stageCol) this.store.moveTask(taskId, { column: stageCol, beforeTaskId: null });
-    const note = `Retrying the ${STAGE_LABELS[stage].toLowerCase()} with a new session.`;
+    const note = `Retrying the ${stageLabel(task.kind, stage).toLowerCase()} with a new session.`;
     if (stage === "research") return this.beginResearch(this.store.getTask(taskId), project, note);
     this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: note });
     return stage === "execute" ? this.startExecution(taskId, { fresh: true }) : this.startReview(taskId, { fresh: true });
@@ -286,7 +288,7 @@ export class Orchestrator {
     if (run.status === "running" || run.status === "queued") throw new HttpError(409, "The researcher is already running");
 
     this.store.setNeedsInput(taskId, false);
-    this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: "Researcher resumed." });
+    this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `${stageLabel(task.kind, "research")} resumed.` });
     const content: ContentBlock[] = run.sessionStarted
       ? [{ type: "text", text: `Continue the research. When you are ready, call ${task.kind === "report" ? "submit_report" : "submit_plan"}. If you need a decision from the user, call ask_human.` }]
       : buildContent(researchBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
@@ -304,7 +306,7 @@ export class Orchestrator {
     if (input.stage !== "research" && (!task.worktreePath || !existsSync(task.worktreePath))) {
       throw new HttpError(
         409,
-        `The ${STAGE_LABELS[input.stage].toLowerCase()} can't run anymore: its worktree was removed when the task was merged. The researcher is still available.`,
+        `The ${stageLabel(task.kind, input.stage).toLowerCase()} can't run anymore: its worktree was removed when the task was merged. The researcher is still available.`,
       );
     }
 
@@ -596,28 +598,21 @@ ${checksSummary(results)}` });
   }
 
   sendBack(taskId: number, notes: string): Task {
-    const task = this.store.getTask(taskId);
-    if (task.column !== "plan_review") throw new HttpError(409, "Only a task in Plan review can be sent back");
-    const run = this.store.latestRun(taskId, "research");
-    if (!run) throw new HttpError(409, "This task has no research agent");
-
-    this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
-    this.store.addMessage({ taskId, runId: run.id, role: "user", kind: "text", text: `Sent the plan back:\n\n${notes}` });
-    const prompt = `The user sent the plan back for changes:\n\n${notes}\n\nRevise the plan and submit it again with submit_plan.`;
-    this.dispatch(run.id, [{ type: "text", text: prompt }], true);
-    this.publish(taskId);
-    return this.store.getTask(taskId);
+    return this.reviseResearch(taskId, { gate: "plan_review", what: "plan", submit: "submit_plan", notes });
   }
 
   // A report task: you read the report and approve it, which finishes the task.
-  approveReportDoc(taskId: number): Task {
+  async approveReportDoc(taskId: number): Promise<Task> {
     const task = this.store.getTask(taskId);
     if (task.kind !== "report" || task.column !== "report_review") {
       throw new HttpError(409, "Only a report in Report review can be approved");
     }
     const doc = this.store.latestReportDoc(taskId);
     if (!doc) throw new HttpError(409, "This task has no report yet");
+    // The agent may still be answering a chat message. Approving ends its work, like approving a review does.
+    await this.stop(taskId);
     this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
+    this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: `Report v${doc.version} approved.` });
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -625,14 +620,23 @@ ${checksSummary(results)}` });
 
   sendBackReportDoc(taskId: number, notes: string): Task {
     const task = this.store.getTask(taskId);
-    if (task.kind !== "report" || task.column !== "report_review") {
-      throw new HttpError(409, "Only a report in Report review can be sent back");
-    }
+    if (task.kind !== "report") throw new HttpError(409, "Only a report task has a report to send back");
+    return this.reviseResearch(taskId, { gate: "report_review", what: "report", submit: "submit_report", notes });
+  }
+
+  // Sends a plan or report back to the research-stage agent with your notes. The agent resumes its session.
+  private reviseResearch(taskId: number, o: { gate: Column; what: string; submit: string; notes: string }): Task {
+    const task = this.store.getTask(taskId);
+    const label = o.what[0]!.toUpperCase() + o.what.slice(1);
+    if (task.column !== o.gate) throw new HttpError(409, `Only a task in ${COLUMN_LABELS[o.gate]} can be sent back`);
     const run = this.store.latestRun(taskId, "research");
-    if (!run) throw new HttpError(409, "This task has no report agent");
+    if (!run) throw new HttpError(409, `This task has no ${stageLabel(task.kind, "research").toLowerCase()}`);
+
     this.store.moveTask(taskId, { column: "research", beforeTaskId: null });
-    this.store.addMessage({ taskId, runId: run.id, role: "user", kind: "text", text: `Sent the report back:\n\n${notes}` });
-    const prompt = `The user sent the report back for changes:\n\n${notes}\n\nRevise the report and submit it again with submit_report.`;
+    // Sending notes answers whatever the agent asked, so the flag no longer applies.
+    if (task.needsInput) this.store.setNeedsInput(taskId, false);
+    this.store.addMessage({ taskId, runId: run.id, role: "user", kind: "text", text: `Sent the ${o.what} back:\n\n${o.notes}` });
+    const prompt = `The user sent the ${o.what} back for changes:\n\n${o.notes}\n\nRevise the ${o.what} and submit it again with ${o.submit}.`;
     this.dispatch(run.id, [{ type: "text", text: prompt }], true);
     this.publish(taskId);
     return this.store.getTask(taskId);
@@ -771,7 +775,7 @@ ${checksSummary(results)}` });
           runId: live.runId,
           role: "system",
           kind: "status",
-          text: `Stopped: the ${STAGE_LABELS[live.stage].toLowerCase()} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}. It may be hung on a command or a network call. Resume it or send a message to start it again.`,
+          text: `Stopped: the ${stageLabel(this.store.getTask(live.taskId).kind, live.stage).toLowerCase()} sent nothing for ${minutes} ${minutes === 1 ? "minute" : "minutes"}. It may be hung on a command or a network call. Resume it or send a message to start it again.`,
         });
         this.bus.publish({ type: "messages.changed", taskId: live.taskId });
         this.stopQuietly(live.taskId);
@@ -1077,7 +1081,7 @@ ${checksSummary(results)}` });
           role: "system",
           kind: "error",
           text:
-            `While the ${STAGE_LABELS[live.stage].toLowerCase()} worked, the repository changed outside the task branch ${branch}. ` +
+            `While the ${stageLabel(this.store.getTask(live.taskId).kind, live.stage).toLowerCase()} worked, the repository changed outside the task branch ${branch}. ` +
             `If you didn't make these changes yourself, check them and undo what you don't want:\n\n` +
             changes.map((c) => `- ${c}`).join("\n"),
         });

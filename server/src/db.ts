@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 
 // Each entry runs once, in order. PRAGMA user_version tracks how many have run.
 // Never edit an entry that has shipped. Add a new one instead.
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   `
   CREATE TABLE projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

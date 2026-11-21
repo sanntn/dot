@@ -131,7 +131,7 @@ async function harness(launches: Launch[], extra: Partial<ConstructorParameters<
   }
   const inColumn = (column: Column) => (t: Task) => t.column === column && t.agentState !== "running" && t.agentState !== "queued";
 
-  return { store, bus, orchestrator, task, repo, calls, until, inColumn };
+  return { store, bus, orchestrator, app, task, repo, calls, until, inColumn };
 }
 
 test("a task goes from the inbox to merge approval through three agents", async () => {
@@ -514,7 +514,7 @@ test("a report task goes from the inbox to done through one agent and your appro
   await waitFor("report review again", () => h.store.getTask(task.id).column === "report_review" && idle());
   assert.equal(h.store.latestReportDoc(task.id)?.report.headline, "A is cheaper and has SSO.");
 
-  h.orchestrator.approveReportDoc(task.id);
+  await h.orchestrator.approveReportDoc(task.id);
   assert.equal(h.store.getTask(task.id).column, "done");
 
   const markdown = taskMarkdown(h.store, task.id);
@@ -528,5 +528,45 @@ test("a report task has no plan or execution stage", async () => {
   const task = h.store.createTask({ projectId: h.task.projectId, title: "Compare", description: "", kind: "report", blockedBy: [] });
   await assert.rejects(() => h.orchestrator.approvePlan(task.id), /Plan review/);
   await assert.rejects(() => h.orchestrator.startExecution(task.id), /Execute/);
-  assert.throws(() => h.orchestrator.approveReportDoc(task.id), /Report review/);
+  await assert.rejects(() => h.orchestrator.approveReportDoc(task.id), /Report review/);
+});
+
+test("the move route refuses a column the task's kind does not have", async () => {
+  const h = await harness([]);
+  const task = h.store.createTask({ projectId: h.task.projectId, title: "Compare", description: "", kind: "report", blockedBy: [] });
+  const move = (id: number, column: string) =>
+    h.app.request(`/api/tasks/${id}/move`, {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "127.0.0.1" },
+      body: JSON.stringify({ column, beforeTaskId: null }),
+    });
+
+  const refused = await move(task.id, "plan_review");
+  assert.equal(refused.status, 400);
+  assert.match(((await refused.json()) as { error: string }).error, /no Plan review column/);
+  assert.equal(h.store.getTask(task.id).column, "inbox");
+
+  assert.equal((await move(task.id, "report_review")).status, 200);
+  assert.equal(h.store.getTask(task.id).column, "report_review");
+  // A code task has no Report review column.
+  assert.equal((await move(h.task.id, "report_review")).status, 400);
+});
+
+test("approving a report ends the agent's work and clears the question flag", async () => {
+  const h = await harness([{ name: "reporter", turns: [[{ tool: "submit_report", args: reportDoc("Done.") }], [{ hang: true }]] }]);
+  const task = h.store.createTask({ projectId: h.task.projectId, title: "Compare", description: "", kind: "report", blockedBy: [] });
+  const idle = () => !["running", "queued"].includes(h.store.getTask(task.id).agentState);
+
+  h.orchestrator.startResearch(task.id);
+  await waitFor("report review", () => h.store.getTask(task.id).column === "report_review" && idle());
+
+  // The agent is answering a chat message when you approve.
+  h.orchestrator.sendMessage(task.id, { stage: "research", text: "One more question.", attachmentIds: [] });
+  await waitFor("agent busy", () => h.store.getTask(task.id).agentState === "running");
+  h.store.setNeedsInput(task.id, true);
+
+  const done = await h.orchestrator.approveReportDoc(task.id);
+  assert.equal(done.column, "done");
+  assert.equal(done.needsInput, false);
+  assert.notEqual(h.store.getTask(task.id).agentState, "running");
 });

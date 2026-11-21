@@ -24,6 +24,7 @@ import type {
   Task,
   TaskDiff,
   TaskInput,
+  TaskKind,
   TaskMove,
   TaskPatch,
   TaskEvent,
@@ -84,7 +85,8 @@ export const api = {
   overview: () => request<ProjectOverview[]>("/overview"),
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),
   createTask: (input: TaskInput) => request<Task>("/tasks", "POST", input),
-  createTasks: (projectId: number, titles: string[]) => request<Task[]>("/tasks/batch", "POST", { projectId, titles }),
+  createTasks: (projectId: number, titles: string[], kind?: TaskKind) =>
+    request<Task[]>("/tasks/batch", "POST", { projectId, titles, kind }),
   listRules: (projectId: number) => request<ProjectRule[]>(`/projects/${projectId}/rules`),
   addRule: (projectId: number, text: string) => request<ProjectRule>(`/projects/${projectId}/rules`, "POST", { text }),
   updateRule: (id: number, patch: { status?: Exclude<RuleStatus, "suggested">; text?: string }) =>

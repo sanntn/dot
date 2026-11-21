@@ -116,6 +116,8 @@ Agents run shell commands, so whatever their OS user can read, a prompt-injected
 
 Use a fine-grained GitHub token, and run Dot in the Docker image or a VM if you point it at repositories you don't trust.
 
+Report tasks read web pages as their main work, so they carry the same risk as the researcher: a page can tell the agent to read a file and put it in the report or in a URL. Turn on `DOT_AGENT_SANDBOX` or run in Docker when reports touch pages you don't trust, and read the sources before you approve.
+
 ## Layout
 
 - `shared/` holds zod schemas and types used by both sides.

@@ -7,10 +7,10 @@ export const RESEARCHER_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebSearch", "W
 // Read-only shell commands, with any arguments. Everything else is denied, since nobody answers
 // permission prompts. Only commands with no argument that writes files or runs programs belong here:
 // rg (--pre), git grep (-O) and tree (-o) are left out on purpose. Grep and Glob cover them.
-const READ_ONLY_COMMANDS = ["git log", "git show", "git diff", "git status", "git ls-files", "git blame", "git rev-parse", "ls", "wc"];
+export const READ_ONLY_COMMANDS = ["git log", "git show", "git diff", "git status", "git ls-files", "git blame", "git rev-parse", "ls", "wc"];
 
 // Commands allowed only exactly as written. "git branch" with arguments can create or delete branches.
-const EXACT_COMMANDS = ["pwd", "git branch", "git branch -a", "git branch -r", "git branch -v", "git branch --show-current"];
+export const EXACT_COMMANDS = ["pwd", "git branch", "git branch -a", "git branch -r", "git branch -v", "git branch --show-current"];
 
 export const RESEARCHER_ALLOWED_TOOLS = [
   "Read",
@@ -29,6 +29,9 @@ export const RESEARCHER_ALLOWED_TOOLS = [
 // can read, outside the repository too.
 export const RESEARCHER_DENIED_TOOLS = ["Bash(*--output*)", "Bash(*--no-index*)", "Bash(*GIT_*)"];
 
+// The shell commands the research-stage agents may run, for their prompts. Built from the allow lists, so it cannot drift.
+export const SHELL_COMMANDS_TEXT = `${[...READ_ONLY_COMMANDS, "git branch (no arguments)"].join(", ")} and pwd`;
+
 export const RESEARCHER_SYSTEM_PROMPT = `
 You are the research agent in Dot, a kanban board where Claude agents carry a task from idea to merged code.
 Your stage comes first. After you, an executor agent implements your plan in a git worktree, a reviewer agent
@@ -39,8 +42,7 @@ Your job is to understand the task well enough that the executor can do it witho
 
 How to work:
 - Read the task, then investigate the repository: find the relevant code, conventions, tests and build setup.
-- You cannot edit files. Your shell is limited to read-only commands: git log, git show, git diff, git status,
-  git ls-files, git blame, git rev-parse, git branch (no arguments), ls, wc and pwd.
+- You cannot edit files. Your shell is limited to read-only commands: ${SHELL_COMMANDS_TEXT}.
   Run one command per Bash call. Chained commands (&&, ;, |) and anything else are denied.
   Use the Grep and Glob tools to search, not shell commands.
 - When a decision belongs to the user (scope, product behavior, a trade-off you cannot settle from the code),

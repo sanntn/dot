@@ -1,8 +1,8 @@
 import {
   AGENT_STAGES,
   COLUMN_LABELS,
-  KINDS,
-  STAGE_LABELS,
+  kindDef,
+  stageLabel,
   type AgentStage,
   type ChatMessage,
   type Column,
@@ -219,7 +219,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
             <div className="flex flex-wrap items-center gap-2">
               <span className="tabular-nums">#{task.number}</span>
               <Badge variant="outline">{COLUMN_LABELS[task.column]}</Badge>
-              {task.kind !== "code" && <Badge variant="secondary">{KINDS[task.kind].label}</Badge>}
+              {task.kind !== "code" && <Badge variant="secondary">{kindDef(task.kind).label}</Badge>}
               <AgentBadge task={task} />
               {cost > 0 && (
                 <span className="text-xs" title="What this usage would cost at API prices. Your subscription covers it.">
@@ -295,7 +295,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                       disabled={busy}
                       onClick={() => void act(() => api.retryStage(task.id, s))}
                     >
-                      {STAGE_LABELS[s]}
+                      {stageLabel(task.kind, s)}
                     </Button>
                   ))}
                 </PopoverContent>
@@ -370,7 +370,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                     aria-pressed={s === chatStage}
                     onClick={() => setPickedStage(s)}
                   >
-                    {STAGE_LABELS[s]}
+                    {stageLabel(task.kind, s)}
                   </Button>
                 ))}
               </div>
@@ -406,7 +406,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
             </TabsContent>
           )}
           <TabsContent value="activity" className="min-h-0 flex-1 overflow-y-auto">
-            <ActivityPanel taskId={task.id} runs={runs} messages={messages} />
+            <ActivityPanel taskId={task.id} kind={task.kind} runs={runs} messages={messages} />
           </TabsContent>
           <TabsContent value="details" forceMount className="min-h-0 flex-1 overflow-y-auto data-[state=inactive]:hidden">
             <TaskDetails task={task} tasks={tasks} onDeleted={() => setOpen(false)} />
@@ -501,7 +501,7 @@ function TaskDetails({ task, tasks, onDeleted }: { task: Task; tasks: Task[]; on
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {KINDS[task.kind].columns.map((c) => (
+            {kindDef(task.kind).columns.map((c) => (
               <SelectItem key={c} value={c}>
                 {COLUMN_LABELS[c]}
               </SelectItem>

@@ -1,5 +1,5 @@
 import { planHeadline, type Plan, type PlanArtifact, type Task } from "@dot/shared";
-import { Check, CornerUpLeft, Pencil, Split } from "lucide-react";
+import { Check, Pencil, Split } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api, errorMessage } from "./api.ts";
 import { Headline, MoreDetails } from "./detail.tsx";
+import { ReviewBar } from "./ReviewBar.tsx";
 import { Prose } from "./Prose.tsx";
 
 // What the fold holds, so you can tell whether it is worth opening.
@@ -22,11 +23,8 @@ function detailLabel(plan: Plan): string {
 export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifact | null }) {
   const [editing, setEditing] = useState(false);
   const [splitting, setSplitting] = useState(false);
-  const [sendingBack, setSendingBack] = useState(false);
-  const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const notesId = useId();
 
   const editable = task.column === "research" || task.column === "plan_review";
   const reviewing = task.column === "plan_review";
@@ -161,55 +159,14 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
       </div>
 
       {reviewing && (
-        <div className="grid gap-3 border-t bg-background p-3">
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          {sendingBack ? (
-            <form
-              className="grid gap-2"
-              onSubmit={async (e: FormEvent) => {
-                e.preventDefault();
-                if (await run(() => api.sendBack(task.id, notes))) {
-                  setNotes("");
-                  setSendingBack(false);
-                }
-              }}
-            >
-              <Label htmlFor={notesId}>What should the researcher change?</Label>
-              <Textarea
-                id={notesId}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                autoFocus
-                required
-                className="max-h-48 min-h-20"
-              />
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setSendingBack(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={busy || !notes.trim()}>
-                  <CornerUpLeft aria-hidden="true" />
-                  Send back
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setSendingBack(true)}>
-                <CornerUpLeft aria-hidden="true" />
-                Send back
-              </Button>
-              <Button type="button" disabled={busy} onClick={() => void run(() => api.approvePlan(task.id))}>
-                <Check aria-hidden="true" />
-                Approve plan
-              </Button>
-            </div>
-          )}
-        </div>
+        <ReviewBar
+          agent="researcher"
+          approveLabel="Approve plan"
+          busy={busy}
+          error={error}
+          onApprove={() => void run(() => api.approvePlan(task.id))}
+          onSendBack={(notes) => run(() => api.sendBack(task.id, notes))}
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 import {
   IMAGE_TYPES,
   MAX_IMAGE_BYTES,
-  STAGE_LABELS,
+  stageLabel,
   type AgentStage,
   type AttachmentRef,
   type ChatKind,
@@ -56,7 +56,7 @@ export function ChatPanel(props: {
   onView: (tab: ArtifactTab) => void;
 }) {
   const { task, stage, messages, hasRun } = props;
-  const agentName = STAGE_LABELS[stage].toLowerCase();
+  const agentName = stageLabel(task.kind, stage).toLowerCase();
   const inputId = useId();
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);

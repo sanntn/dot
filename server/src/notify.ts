@@ -21,6 +21,7 @@ function reason(task: Task, question: string | null): string {
   if (task.agentState === "failed") return "The agent stopped with an error.";
   if (task.needsInput) return question ? `The agent asks: ${question}` : "The agent asked you a question.";
   if (task.column === "plan_review") return "The plan is ready for you to review.";
+  if (task.column === "report_review") return "The report is ready for you to read.";
   if (task.column === "merge_approval") return "The change is ready to merge when you approve.";
   return "It needs you.";
 }

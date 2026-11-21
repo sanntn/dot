@@ -1,13 +1,10 @@
 import { reportDocHeadline, type ReportDocArtifact, type Task } from "@dot/shared";
-import { Check, CornerUpLeft, ExternalLink } from "lucide-react";
-import { useId, useState, type FormEvent } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { ExternalLink } from "lucide-react";
+import { useState } from "react";
 import { api, errorMessage } from "./api.ts";
 import { Headline } from "./detail.tsx";
 import { Prose } from "./Prose.tsx";
+import { ReviewBar } from "./ReviewBar.tsx";
 
 // Only web addresses become links. A source may also be a repository path, which has nowhere to go.
 function isWebUrl(value: string): boolean {
@@ -16,11 +13,8 @@ function isWebUrl(value: string): boolean {
 
 // A report task's output: the document, its sources, and what the agent could not settle.
 export function ReportPanel({ task, artifact }: { task: Task; artifact: ReportDocArtifact | null }) {
-  const [sendingBack, setSendingBack] = useState(false);
-  const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const notesId = useId();
   const reviewing = task.column === "report_review";
 
   async function run(action: () => Promise<unknown>) {
@@ -95,48 +89,14 @@ export function ReportPanel({ task, artifact }: { task: Task; artifact: ReportDo
       </div>
 
       {reviewing && (
-        <div className="grid gap-3 border-t bg-background p-3">
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          {sendingBack ? (
-            <form
-              className="grid gap-2"
-              onSubmit={async (e: FormEvent) => {
-                e.preventDefault();
-                if (await run(() => api.sendBackReportDoc(task.id, notes))) {
-                  setNotes("");
-                  setSendingBack(false);
-                }
-              }}
-            >
-              <Label htmlFor={notesId}>What should the agent change?</Label>
-              <Textarea id={notesId} value={notes} onChange={(e) => setNotes(e.target.value)} autoFocus required className="max-h-48 min-h-20" />
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setSendingBack(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={busy || !notes.trim()}>
-                  <CornerUpLeft aria-hidden="true" />
-                  Send back
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setSendingBack(true)}>
-                <CornerUpLeft aria-hidden="true" />
-                Send back
-              </Button>
-              <Button type="button" disabled={busy} onClick={() => void run(() => api.approveReportDoc(task.id))}>
-                <Check aria-hidden="true" />
-                Approve report
-              </Button>
-            </div>
-          )}
-        </div>
+        <ReviewBar
+          agent="agent"
+          approveLabel="Approve report"
+          busy={busy}
+          error={error}
+          onApprove={() => void run(() => api.approveReportDoc(task.id))}
+          onSendBack={(notes) => run(() => api.sendBackReportDoc(task.id, notes))}
+        />
       )}
     </div>
   );

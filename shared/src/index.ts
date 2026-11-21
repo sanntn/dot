@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_KIND, KINDS, TASK_KINDS } from "./kinds.ts";
+import { DEFAULT_KIND, kindDef, TASK_KINDS } from "./kinds.ts";
 
 export * from "./kinds.ts";
 
@@ -179,6 +179,9 @@ export const STAGE_LABELS: Record<AgentStage, string> = {
   review: "Reviewer",
 };
 
+// What to call a stage's agent on a task of this kind.
+export const stageLabel = (kind: string, stage: AgentStage): string => kindDef(kind).stageLabels[stage] ?? STAGE_LABELS[stage];
+
 // After this many review rounds that request changes, the task waits for you instead of looping.
 export const MAX_REVIEW_ROUNDS = 3;
 
@@ -223,7 +226,7 @@ export type Lane = (typeof LANES)[number];
 export function laneOf(task: Pick<Task, "kind" | "column" | "needsInput" | "agentState">): Lane {
   if (task.column === "inbox") return "inbox";
   if (task.column === "done") return "done";
-  if (KINDS[task.kind].gates.includes(task.column)) return "needs_you";
+  if (kindDef(task.kind).gates.includes(task.column)) return "needs_you";
   if (task.needsInput || task.agentState === "failed") return "needs_you";
   return "working";
 }
@@ -286,6 +289,7 @@ export type TaskPatch = z.input<typeof TaskPatchSchema>;
 export const MAX_BATCH = 50;
 export const TaskBatchSchema = z.object({
   projectId: z.number().int().positive(),
+  kind: z.enum(TASK_KINDS).default(DEFAULT_KIND),
   titles: z.array(z.string().trim().min(1).max(200)).min(1, "Add at least one title").max(MAX_BATCH),
 });
 export type TaskBatch = z.input<typeof TaskBatchSchema>;

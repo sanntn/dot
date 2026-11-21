@@ -1,4 +1,4 @@
-import { AGENT_STAGES, COLUMN_LABELS, STAGE_LABELS, type ChatMessage, type Run, type TaskEvent } from "@dot/shared";
+import { AGENT_STAGES, COLUMN_LABELS, stageLabel, type ChatMessage, type TaskKind, type Run, type TaskEvent } from "@dot/shared";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.ts";
 
@@ -25,10 +25,10 @@ function eventEntry(e: TaskEvent): Entry {
   return { at: e.createdAt, label: "The agent stopped with an error", tone: "error" };
 }
 
-function entries(runs: Run[], messages: ChatMessage[], events: TaskEvent[]): Entry[] {
+function entries(kind: TaskKind, runs: Run[], messages: ChatMessage[], events: TaskEvent[]): Entry[] {
   const list: Entry[] = events.map(eventEntry);
   for (const run of runs) {
-    const name = STAGE_LABELS[run.stage];
+    const name = stageLabel(kind, run.stage);
     list.push({ at: run.createdAt, label: `${name} started` });
     if (run.status === "failed") {
       list.push({ at: run.updatedAt, label: `${name} failed`, detail: run.error ? clip(run.error) : undefined, tone: "error" });
@@ -53,7 +53,7 @@ function dollars(value: number): string {
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export function ActivityPanel({ taskId, runs, messages }: { taskId: number; runs: Run[]; messages: ChatMessage[] }) {
+export function ActivityPanel({ taskId, kind, runs, messages }: { taskId: number; kind: TaskKind; runs: Run[]; messages: ChatMessage[] }) {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   // Runs and messages change whenever the task does, so they double as the refetch trigger.
   useEffect(() => {
@@ -68,7 +68,7 @@ export function ActivityPanel({ taskId, runs, messages }: { taskId: number; runs
       alive = false;
     };
   }, [taskId, runs, messages]);
-  const timeline = useMemo(() => entries(runs, messages, events), [runs, messages, events]);
+  const timeline = useMemo(() => entries(kind, runs, messages, events), [kind, runs, messages, events]);
   const byStage = AGENT_STAGES.map((stage) => {
     const own = runs.filter((r) => r.stage === stage);
     return { stage, count: own.length, cost: own.reduce((sum, r) => sum + r.costUsd, 0) };
@@ -100,7 +100,7 @@ export function ActivityPanel({ taskId, runs, messages }: { taskId: number; runs
                 {byStage.map((row) => (
                   <tr key={row.stage} className="border-b">
                     <th scope="row" className="py-1.5 text-left font-normal">
-                      {STAGE_LABELS[row.stage]}
+                      {stageLabel(kind, row.stage)}
                     </th>
                     <td className="py-1.5 text-right text-muted-foreground tabular-nums">
                       {row.count} {row.count === 1 ? "run" : "runs"}

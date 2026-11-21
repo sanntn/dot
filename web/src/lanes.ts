@@ -1,4 +1,4 @@
-import { KINDS, LANES, laneOf, type Column, type Lane, type Task } from "@dot/shared";
+import { kindDef, LANES, laneOf, type Column, type Lane, type Task } from "@dot/shared";
 
 export { LANES, laneOf, type Lane };
 
@@ -18,7 +18,7 @@ export function laneEntry(task: Pick<Task, "kind">, lane: Lane): Column {
     case "working":
       return "research";
     case "needs_you":
-      return KINDS[task.kind].gates[0] ?? "plan_review";
+      return kindDef(task.kind).gates[0] ?? "plan_review";
     case "done":
       return "done";
   }
@@ -26,7 +26,7 @@ export function laneEntry(task: Pick<Task, "kind">, lane: Lane): Column {
 
 // The pipeline condensed to a few steps for the card's progress bar. The steps come from the task's kind.
 export function stepOf(task: Task): { index: number; label: string; total: number } | null {
-  const kind = KINDS[task.kind];
+  const kind = kindDef(task.kind);
   const index = kind.stepOf[task.column];
   const label = index === undefined ? undefined : kind.steps[index];
   if (index === undefined || label === undefined) return null;
@@ -34,7 +34,7 @@ export function stepOf(task: Task): { index: number; label: string; total: numbe
 }
 
 export function canRetry(task: Task): boolean {
-  return task.agentState === "failed" && KINDS[task.kind].startable.includes(task.column);
+  return task.agentState === "failed" && kindDef(task.kind).startable.includes(task.column);
 }
 
 export function canStart(task: Task): boolean {
