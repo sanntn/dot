@@ -29,7 +29,7 @@ function formatWhen(iso: string): string {
 }
 
 // Schedules make a task on a rhythm and start its research. The project's task budget caps what each one spends.
-export function SchedulesSection({ projectId, projectKind }: { projectId: number; projectKind: ProjectKind }) {
+export function SchedulesSection({ projectId, projectKind, taskBudgetUsd = null }: { projectId: number; projectKind: ProjectKind; taskBudgetUsd?: number | null }) {
   const kinds = taskKindsFor(projectKind);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +107,11 @@ export function SchedulesSection({ projectId, projectKind }: { projectId: number
         The project's task budget caps what each run spends.
       </p>
 
+      {taskBudgetUsd === null && (
+        <p role="note" className="text-sm text-amber-600 dark:text-amber-400">
+          This project has no task budget, so scheduled runs can spend without a limit. Set one in the project's settings.
+        </p>
+      )}
       {schedules.length === 0 && !adding && <p className="text-sm text-muted-foreground">No schedules in this project.</p>}
       {schedules.length > 0 && (
         <ul className="grid gap-2">

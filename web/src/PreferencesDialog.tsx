@@ -111,7 +111,7 @@ function StorageSection() {
   );
 }
 
-export function PreferencesDialog({ projectId, projectKind = "repo", onClose }: { projectId: number | null; projectKind?: ProjectKind; onClose: () => void }) {
+export function PreferencesDialog({ projectId, projectKind = "repo", taskBudgetUsd = null, onClose }: { projectId: number | null; projectKind?: ProjectKind; taskBudgetUsd?: number | null; onClose: () => void }) {
   const [on, setOn] = useState(notificationsEnabled);
   const fullDetail = useFullDetail();
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -187,7 +187,7 @@ export function PreferencesDialog({ projectId, projectKind = "repo", onClose }: 
 
         {projectId !== null && <RulesSection projectId={projectId} />}
 
-        {projectId !== null && <SchedulesSection projectId={projectId} projectKind={projectKind} />}
+        {projectId !== null && <SchedulesSection projectId={projectId} projectKind={projectKind} taskBudgetUsd={taskBudgetUsd} />}
 
         <StorageSection />
 

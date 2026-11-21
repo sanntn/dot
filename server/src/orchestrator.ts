@@ -586,6 +586,7 @@ ${checksSummary(results)}` });
     const task = this.store.getTask(taskId);
     if (task.column !== "review") throw new HttpError(409, "Only a task in Review can be approved");
     await this.stop(taskId);
+    this.requireColumn(taskId, "review");
     this.store.moveTask(taskId, { column: "merge_approval", beforeTaskId: null });
     this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "You approved the change." });
@@ -639,6 +640,7 @@ ${checksSummary(results)}` });
     if (!doc) throw new HttpError(409, "This task has no report yet");
     // The agent may still be answering a chat message. Approving ends its work, like approving a review does.
     await this.stop(taskId);
+    this.requireColumn(taskId, "report_review");
     this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
     this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: `Report v${doc.version} approved.` });
@@ -725,6 +727,7 @@ ${checksSummary(results)}` });
     const latest = this.store.latestProposals(taskId);
     if (!latest) throw new HttpError(409, "This task has no proposals yet");
     await this.stop(taskId);
+    this.requireColumn(taskId, "triage_review");
     const open = latest.proposals.items.filter((item, i) => item.action === "create_task" && !latest.decisions[i]).length;
     this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
     this.store.setNeedsInput(taskId, false);
@@ -1070,8 +1073,27 @@ ${checksSummary(results)}` });
   private drainQueue(): void {
     while (this.queue.length > 0 && this.runningCount() < this.config.maxAgents) {
       const live = this.getLive(this.queue.shift()!);
-      if (live.pending.length > 0) this.launch(live);
+      if (live.pending.length === 0) continue;
+      try {
+        this.launch(live);
+      } catch (err) {
+        // A run that cannot start must not stay Queued, and must not hold up the runs behind it.
+        const detail = err instanceof Error ? err.message : String(err);
+        live.pending = [];
+        this.safely(live.taskId, () => {
+          this.store.updateRun(live.runId, { status: "failed", error: detail });
+          this.store.setNeedsInput(live.taskId, true);
+          this.store.setAgentState(live.taskId, "failed");
+          this.store.addMessage({ taskId: live.taskId, runId: live.runId, role: "system", kind: "error", text: `The agent could not start.\n\n${detail}` });
+          this.publish(live.taskId);
+        });
+      }
     }
+  }
+
+  // After waiting for a stop, the task may have moved on, such as a send-back that arrived meanwhile.
+  private requireColumn(taskId: number, column: Column): void {
+    if (this.store.getTask(taskId).column !== column) throw new HttpError(409, "The task changed while it was stopping. Look at it again.");
   }
 
   // The project's model for the stage, or the server default.

@@ -102,6 +102,14 @@ test("a task finished twice shows the latest finish time", () => {
   assert.equal(store.listOutputs()[0]!.finishedAt, finishes.at(-1)!.createdAt);
 });
 
+test("the report and proposals routes answer 404 for a missing task", async () => {
+  const { store } = fixture();
+  const app = createApp(store, new EventBus(), {} as never, { attachmentsDir: "/tmp/a", reposDir: "/tmp/r", auth: new Auth(null, null, null) });
+  for (const path of ["/tasks/999/doc", "/tasks/999/proposals"]) {
+    assert.equal((await app.request(`/api${path}`, { headers: { host: "127.0.0.1" } })).status, 404, path);
+  }
+});
+
 test("the route filters and refuses an unknown kind", async () => {
   const { store, a, done } = fixture();
   done(a.id, "Scan", "report");

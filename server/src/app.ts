@@ -60,7 +60,9 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/webp": "webp",
 };
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const MAX_TASK_IMAGE_BYTES = 100 * 1024 * 1024;
+
+const LOOPBACK_HOSTS =new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 const hostnameOf = (host: string) => host.toLowerCase().replace(/:\d+$/, "");
 
@@ -641,7 +643,7 @@ export function createApp(
   app.post("/tasks/:id/plan/approve", async (c) => c.json(await orchestrator.approvePlan(idParam(c))));
 
   // A report task's document. Approving finishes the task.
-  app.get("/tasks/:id/doc", (c) => c.json(store.latestReportDoc(idParam(c))));
+  app.get("/tasks/:id/doc", (c) => c.json(store.latestReportDoc(store.getTask(idParam(c)).id)));
   app.post("/tasks/:id/doc/approve", async (c) => c.json(await orchestrator.approveReportDoc(idParam(c))));
   app.post("/tasks/:id/doc/send-back", async (c) => {
     const { notes } = await parseBody(c, SendBackSchema);
@@ -649,7 +651,7 @@ export function createApp(
   });
 
   // A triage task's proposed tasks. Accept or reject items, then finish.
-  app.get("/tasks/:id/proposals", (c) => c.json(store.latestProposals(idParam(c))));
+  app.get("/tasks/:id/proposals", (c) => c.json(store.latestProposals(store.getTask(idParam(c)).id)));
   app.post("/tasks/:id/proposals/decide", async (c) => {
     const input = await parseBody(c, ProposalDecideSchema);
     return c.json(orchestrator.decideProposals(idParam(c), input));
@@ -680,6 +682,10 @@ export function createApp(
     const bytes = Buffer.from(await c.req.arrayBuffer());
     if (bytes.length === 0) throw new HttpError(400, "The file is empty");
     if (bytes.length > MAX_IMAGE_BYTES) throw new HttpError(400, "Images can be at most 5 MB");
+    // Chat images have no count limit, so cap what one task keeps on disk.
+    if (store.attachmentBytes(taskId) + bytes.length > MAX_TASK_IMAGE_BYTES) {
+      throw new HttpError(400, "This task already holds 100 MB of images. Delete the task or start a new one.");
+    }
 
     let rawName = "";
     try {

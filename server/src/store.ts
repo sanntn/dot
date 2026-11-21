@@ -804,6 +804,12 @@ export class Store {
   }
 
   // Images attached when the task was created. The researcher gets them with its brief.
+  // Disk the task's images use, chat images included.
+  attachmentBytes(taskId: number): number {
+    const row = this.db.prepare("SELECT COALESCE(SUM(size), 0) AS bytes FROM attachments WHERE task_id = ?").get(taskId) as { bytes: number };
+    return row.bytes;
+  }
+
   taskAttachments(taskId: number): Attachment[] {
     const ids = this.db
       .prepare("SELECT id FROM attachments WHERE task_id = ? AND origin = 'task' ORDER BY id")

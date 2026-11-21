@@ -384,7 +384,7 @@ export function App() {
       {dialog?.kind === "new-task" && projectId !== null && <TaskDialog projectId={projectId} projectKind={project?.kind ?? "repo"} tasks={tasks} onClose={closeDialog} onError={setError} />}
       {openTask && <TaskSheet key={openTask.id} task={openTask} tasks={tasks} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
-      {dialog?.kind === "preferences" && <PreferencesDialog projectId={projectId} projectKind={project?.kind ?? "repo"} onClose={closeDialog} />}
+      {dialog?.kind === "preferences" && <PreferencesDialog projectId={projectId} projectKind={project?.kind ?? "repo"} taskBudgetUsd={project?.taskBudgetUsd ?? null} onClose={closeDialog} />}
       {dialog?.kind === "all-projects" && projects && (
         <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
       )}
