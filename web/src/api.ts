@@ -12,6 +12,8 @@ import type {
   Project,
   ProjectInput,
   ProjectOverview,
+  ExternalIssue,
+  ProjectMemory,
   ProjectRule,
   RuleStatus,
   SearchHit,
@@ -121,6 +123,18 @@ export const api = {
   updateRule: (id: number, patch: { status?: Exclude<RuleStatus, "suggested">; text?: string }) =>
     request<ProjectRule>(`/rules/${id}`, "PATCH", patch),
   deleteRule: (id: number) => request<void>(`/rules/${id}`, "DELETE"),
+  listMemory: (projectId: number) => request<ProjectMemory[]>(`/projects/${projectId}/memory`),
+  addMemory: (projectId: number, text: string) => request<ProjectMemory>(`/projects/${projectId}/memory`, "POST", { text }),
+  updateMemory: (id: number, patch: { text?: string; status?: "active" }) => request<ProjectMemory>(`/memory/${id}`, "PATCH", patch),
+  deleteMemory: (id: number) => request<void>(`/memory/${id}`, "DELETE"),
+  listIssues: (projectId: number, label?: string) =>
+    request<ExternalIssue[]>(`/projects/${projectId}/issues${label ? `?label=${encodeURIComponent(label)}` : ""}`),
+  listFavroCards: (projectId: number, column?: string) =>
+    request<{ cards: ExternalIssue[]; truncated: boolean }>(`/projects/${projectId}/favro/cards${column ? `?column=${encodeURIComponent(column)}` : ""}`),
+  importFavroCards: (projectId: number, numbers: number[], start: boolean) =>
+    request<{ tasks: Task[]; skipped: { number: number; reason: string }[] }>(`/projects/${projectId}/favro/import`, "POST", { numbers, start }),
+  importIssues: (projectId: number, numbers: number[], start: boolean) =>
+    request<{ tasks: Task[]; skipped: { number: number; reason: string }[] }>(`/projects/${projectId}/issues/import`, "POST", { numbers, start }),
   listTemplates: (projectId: number) => request<TaskTemplate[]>(`/projects/${projectId}/templates`),
   addTemplate: (projectId: number, input: TemplateInput) =>
     request<TaskTemplate>(`/projects/${projectId}/templates`, "POST", input),
@@ -157,6 +171,8 @@ export const api = {
   savePlan: (id: number, plan: Plan) => request<PlanArtifact>(`/tasks/${id}/plan`, "PUT", { plan }),
   splitPlan: (id: number, title: string, steps: number[]) =>
     request<{ task: Task; plan: PlanArtifact }>(`/tasks/${id}/plan/split`, "POST", { title, steps }),
+  splitPlanIntoSubtasks: (id: number) => request<Task[]>(`/tasks/${id}/plan/split-all`, "POST"),
+  startPreview: (id: number) => request<Task>(`/tasks/${id}/preview`, "POST"),
   approvePlan: (id: number) => request<Task>(`/tasks/${id}/plan/approve`, "POST"),
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
   getReportDoc: (id: number) => request<ReportDocArtifact | null>(`/tasks/${id}/doc`),

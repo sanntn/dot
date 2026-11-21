@@ -13,7 +13,7 @@ import {
   type Run,
   type Task,
 } from "@dot/shared";
-import { Download, FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
+import { Camera, Download, FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -236,6 +236,19 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
                   {cost < 0.01 ? "< $0.01" : `≈ $${cost.toFixed(2)}`} at API prices
                 </span>
               )}
+              {task.sourceRef?.startsWith("favro:") && (
+                <span className="text-xs">Favro card #{task.sourceRef.match(/#(\d+)$/)?.[1]}</span>
+              )}
+              {task.sourceUrl && (
+                <a
+                  href={task.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs underline underline-offset-2"
+                >
+                  {task.sourceRef?.match(/#(\d+)$/) ? `GitHub issue #${task.sourceRef.match(/#(\d+)$/)![1]}` : "Source"}
+                </a>
+              )}
               {task.prUrl && (
                 <a
                   href={task.prUrl}
@@ -260,6 +273,12 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               <Button size="sm" disabled={busy} onClick={() => void act(() => approveMerge())}>
                 <GitMerge aria-hidden="true" />
                 Merge
+              </Button>
+            )}
+            {task.column === "merge_approval" && !working && isCode && (
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => api.startPreview(task.id))}>
+                <Camera aria-hidden="true" />
+                Preview
               </Button>
             )}
             {task.column === "merge" && !working && (

@@ -1,5 +1,5 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
+import { Bell, Download, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -28,6 +28,7 @@ import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
 import { applyMove } from "./move.ts";
 import { useNeedsYouNotifications } from "./notifications.ts";
+import { ImportIssuesDialog } from "./ImportIssuesDialog.tsx";
 import { PreferencesDialog } from "./PreferencesDialog.tsx";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { TaskDialog } from "./TaskDialog.tsx";
@@ -43,6 +44,7 @@ type OpenDialog =
   | { kind: "shortcuts" }
   | { kind: "command" }
   | { kind: "all-projects" }
+  | { kind: "import-issues" }
   | { kind: "preferences" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
@@ -342,6 +344,12 @@ export function App() {
                 All projects
               </Button>
             )}
+            {project && (project.kind === "repo" || project.favroBoard) && (
+              <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "import-issues" })}>
+                <Download aria-hidden="true" />
+                Import issues and cards
+              </Button>
+            )}
             <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
               <FolderPlus aria-hidden="true" />
               New project
@@ -408,6 +416,13 @@ export function App() {
       {openTask && <TaskSheet key={openTask.id} task={openTask} tasks={tasks} onClose={closeTaskDialog(openTask.id)} />}
       {dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={closeDialog} />}
       {dialog?.kind === "preferences" && <PreferencesDialog projectId={projectId} projectKind={project?.kind ?? "repo"} taskBudgetUsd={project?.taskBudgetUsd ?? null} onClose={closeDialog} />}
+      {dialog?.kind === "import-issues" && project && (
+        <ImportIssuesDialog
+          project={project}
+          onClose={closeDialog}
+          onOpenTask={(taskId) => setDialog({ kind: "task", taskId })}
+        />
+      )}
       {dialog?.kind === "all-projects" && projects && (
         <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
       )}
@@ -423,6 +438,7 @@ export function App() {
             projects: projects ?? [],
             projectId,
             newTask: project ? openNewTask : null,
+            importIssues: project && (project.kind === "repo" || project.favroBoard) ? () => setDialog({ kind: "import-issues" }) : null,
             shortcuts: openShortcuts,
             allProjects: () => setDialog({ kind: "all-projects" }),
             goTo: setView,

@@ -115,6 +115,7 @@ export function ProjectDialog(props: {
       repoName: text("repoName") || null,
     };
     if (!isWorkspace) for (const field of TEXT_FIELDS) input[field.name] = text(field.name) || null;
+    input.favroBoard = text("favroBoard") || null;
 
     // Once saved, the button only closes. A base branch swap stays on screen until it is read.
     if (notice) {
@@ -249,6 +250,19 @@ export function ProjectDialog(props: {
             </div>
           </div>
           )}
+
+          <div className="grid gap-2">
+            <Label htmlFor={`${id}-favroBoard`}>Favro board to import cards from</Label>
+            <Input
+              id={`${id}-favroBoard`}
+              name="favroBoard"
+              defaultValue={project?.favroBoard ?? ""}
+              placeholder="A link copied from Favro, or a board ID"
+              spellCheck={false}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">Optional. Needs DOT_FAVRO_EMAIL and DOT_FAVRO_TOKEN in Dot's .env file.</p>
+          </div>
 
           {!isWorkspace && <PullRequestFields id={id} project={project} repoPath={repoPath} host={repoHost} onHostChange={setRepoHost} />}
 

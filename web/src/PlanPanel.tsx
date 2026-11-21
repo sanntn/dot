@@ -1,4 +1,4 @@
-import { planHeadline, type Plan, type PlanArtifact, type Task } from "@dot/shared";
+import { planHeadline, planSubtaskProblem, type Plan, type PlanArtifact, type Task } from "@dot/shared";
 import { Check, Pencil, Split } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -107,6 +107,13 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
 
         <div className="grid gap-6">
           <Headline>{planHeadline(plan)}</Headline>
+          {reviewing && plan.subtasks && plan.subtasks.length > 0 && (
+            <SubtaskSuggestion
+              plan={plan}
+              busy={busy}
+              onSplit={() => void run(() => api.splitPlanIntoSubtasks(task.id))}
+            />
+          )}
           <Section title="Goal">
             <Prose className="text-sm">{plan.goal}</Prose>
           </Section>
@@ -169,6 +176,41 @@ export function PlanPanel({ task, artifact }: { task: Task; artifact: PlanArtifa
         />
       )}
     </div>
+  );
+}
+
+// The researcher thinks the work is several separate changes. Splitting makes one task per part: tasks with
+// nothing to wait for start by themselves and run side by side, and the rest start when what they wait for is done.
+function SubtaskSuggestion({ plan, busy, onSplit }: { plan: Plan; busy: boolean; onSplit: () => void }) {
+  const subtasks = plan.subtasks ?? [];
+  const problem = planSubtaskProblem(plan);
+  return (
+    <section className="grid gap-2 rounded-lg border border-dashed p-3" aria-label="Suggested split">
+      <h3 className="text-sm font-semibold">The researcher suggests {subtasks.length} tasks</h3>
+      <ol className="grid list-decimal gap-1 pl-5 text-sm">
+        {subtasks.map((s, i) => (
+          <li key={i}>
+            {s.title}
+            <span className="text-muted-foreground">
+              {" "}
+              ({s.steps.length === 1 ? "step" : "steps"} {s.steps.map((n) => n + 1).join(", ")}
+              {s.dependsOn.length > 0 ? `, after ${s.dependsOn.map((d) => `task ${d + 1}`).join(" and ")}` : ", starts right away"})
+            </span>
+          </li>
+        ))}
+      </ol>
+      {problem ? (
+        <p className="text-sm text-destructive">This split cannot be applied: {problem}. Ask the researcher to fix it, or approve the plan as one task.</p>
+      ) : (
+        <div className="flex items-center gap-3">
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={onSplit}>
+            <Split aria-hidden="true" />
+            Split into {subtasks.length} tasks
+          </Button>
+          <span className="text-xs text-muted-foreground">This task closes, and each part gets its own research and pull request.</span>
+        </div>
+      )}
+    </section>
   );
 }
 

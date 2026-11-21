@@ -23,6 +23,7 @@ export function buildCommands(input: {
   projects: Project[];
   projectId: number | null;
   newTask: (() => void) | null;
+  importIssues: (() => void) | null;
   shortcuts: () => void;
   allProjects: () => void;
   goTo: (view: View) => void;
@@ -31,6 +32,7 @@ export function buildCommands(input: {
 }): CommandItem[] {
   const items: CommandItem[] = [];
   if (input.newTask) items.push({ id: "new-task", group: "Actions", label: "New task", run: input.newTask });
+  if (input.importIssues) items.push({ id: "import-issues", group: "Actions", label: "Import issues and cards", run: input.importIssues });
   if (input.projects.length > 1) items.push({ id: "all-projects", group: "Actions", label: "All projects", run: input.allProjects });
   for (const view of VIEWS) items.push({ id: `view-${view}`, group: "Actions", label: `Go to ${VIEW_LABELS[view]}`, run: () => input.goTo(view) });
   items.push({ id: "shortcuts", group: "Actions", label: "Keyboard shortcuts", run: input.shortcuts });
