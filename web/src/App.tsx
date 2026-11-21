@@ -1,5 +1,5 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Archive, Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
+import { Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -17,7 +17,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, errorMessage } from "./api.ts";
 import { AllProjectsDialog } from "./AllProjectsDialog.tsx";
-import { OutputsDialog } from "./OutputsDialog.tsx";
+import { DocumentsView } from "./DocumentsView.tsx";
+import { FeedView } from "./FeedView.tsx";
+import { OutputsView } from "./OutputsView.tsx";
+import { TriageView } from "./TriageView.tsx";
+import { ViewNav } from "./ViewNav.tsx";
+import { readStoredView, storeView, type View } from "./views.ts";
 import { Board } from "./Board.tsx";
 import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
@@ -38,7 +43,6 @@ type OpenDialog =
   | { kind: "shortcuts" }
   | { kind: "command" }
   | { kind: "all-projects" }
-  | { kind: "outputs" }
   | { kind: "preferences" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
@@ -62,6 +66,14 @@ function storeProject(id: number) {
   }
 }
 
+function ViewHost(props: { view: Exclude<View, "board">; projects: Project[]; currentId: number | null; onOpen: (projectId: number, taskId: number) => void }) {
+  const { view, ...rest } = props;
+  if (view === "documents") return <DocumentsView {...rest} />;
+  if (view === "triage") return <TriageView {...rest} />;
+  if (view === "feed") return <FeedView {...rest} />;
+  return <OutputsView {...rest} />;
+}
+
 export function App() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   // A link from a webhook message, /?project=1&task=7, opens that task. The address is cleaned up in an effect below.
@@ -79,6 +91,11 @@ export function App() {
   const [selectedId, setSelectedId] = useState<number | null>(() => link?.project ?? readStoredProject());
   const [tasks, setTasks] = useState<Task[]>([]);
   const [dialog, setDialog] = useState<OpenDialog | null>(() => (link ? { kind: "task", taskId: link.task } : null));
+  const [view, setViewState] = useState<View>(readStoredView);
+  const setView = useCallback((next: View) => {
+    setViewState(next);
+    storeView(next);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const announceTimer = useRef<number | undefined>(undefined);
@@ -156,6 +173,12 @@ export function App() {
   }
 
   const closeDialog = () => setDialog(null);
+
+  // A row in a view opens its task, in its own project's board.
+  const openFromView = (taskProjectId: number, taskId: number) => {
+    if (taskProjectId !== projectId) selectProject(taskProjectId);
+    setDialog({ kind: "task", taskId });
+  };
 
   // The tab title counts what waits for you, so it shows from another tab.
   const waiting = tasks.filter((t) => laneOf(t) === "needs_you").length;
@@ -319,10 +342,6 @@ export function App() {
                 All projects
               </Button>
             )}
-            <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "outputs" })}>
-              <Archive aria-hidden="true" />
-              Outputs
-            </Button>
             <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
               <FolderPlus aria-hidden="true" />
               New project
@@ -354,7 +373,11 @@ export function App() {
         </div>
       )}
 
-      {projects === null ? null : project ? (
+      {project && <ViewNav view={view} onChange={setView} />}
+
+      {projects === null ? null : project && view !== "board" ? (
+        <ViewHost view={view} projects={projects} currentId={projectId} onOpen={openFromView} />
+      ) : project ? (
         <Board
           tasks={tasks}
           onOpenTask={(task) => setDialog({ kind: "task", taskId: task.id })}
@@ -388,17 +411,6 @@ export function App() {
       {dialog?.kind === "all-projects" && projects && (
         <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
       )}
-      {dialog?.kind === "outputs" && projects && (
-        <OutputsDialog
-          projects={projects}
-          currentId={projectId}
-          onClose={closeDialog}
-          onOpen={(output) => {
-            if (output.projectId !== projectId) selectProject(output.projectId);
-            setDialog({ kind: "task", taskId: output.taskId });
-          }}
-        />
-      )}
       {dialog?.kind === "command" && (
         <CommandMenu
           onClose={closeDialog}
@@ -413,7 +425,7 @@ export function App() {
             newTask: project ? openNewTask : null,
             shortcuts: openShortcuts,
             allProjects: () => setDialog({ kind: "all-projects" }),
-            outputs: () => setDialog({ kind: "outputs" }),
+            goTo: setView,
             openTask: (task) => setDialog({ kind: "task", taskId: task.id }),
             selectProject,
           })}

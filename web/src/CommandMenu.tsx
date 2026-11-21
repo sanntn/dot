@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { api } from "./api.ts";
 import { LANE_LABELS, laneOf } from "./lanes.ts";
+import { VIEWS, VIEW_LABELS, type View } from "./views.ts";
 
 export type CommandItem = {
   id: string;
@@ -24,14 +25,14 @@ export function buildCommands(input: {
   newTask: (() => void) | null;
   shortcuts: () => void;
   allProjects: () => void;
-  outputs: () => void;
+  goTo: (view: View) => void;
   openTask: (task: Task) => void;
   selectProject: (id: number) => void;
 }): CommandItem[] {
   const items: CommandItem[] = [];
   if (input.newTask) items.push({ id: "new-task", group: "Actions", label: "New task", run: input.newTask });
   if (input.projects.length > 1) items.push({ id: "all-projects", group: "Actions", label: "All projects", run: input.allProjects });
-  items.push({ id: "outputs", group: "Actions", label: "Outputs", run: input.outputs });
+  for (const view of VIEWS) items.push({ id: `view-${view}`, group: "Actions", label: `Go to ${VIEW_LABELS[view]}`, run: () => input.goTo(view) });
   items.push({ id: "shortcuts", group: "Actions", label: "Keyboard shortcuts", run: input.shortcuts });
   for (const task of input.tasks) {
     items.push({

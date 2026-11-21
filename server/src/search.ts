@@ -27,7 +27,7 @@ type Row = {
 
 // The best match per task, best first. A task whose title and chat both match shows once.
 // `doneOnly` keeps the filter inside the query, so the row cap below counts only finished tasks.
-export function searchTasks(db: Db, input: string, options: { projectId?: number; limit?: number; doneOnly?: boolean } = {}): SearchHit[] {
+export function searchTasks(db: Db, input: string, options: { projectId?: number; limit?: number; doneOnly?: boolean; taskKind?: string } = {}): SearchHit[] {
   const match = toMatchQuery(input);
   if (!match) return [];
   const limit = options.limit ?? 20;
@@ -38,11 +38,11 @@ export function searchTasks(db: Db, input: string, options: { projectId?: number
        FROM search s
        JOIN tasks t ON t.id = s.task_id
        JOIN projects p ON p.id = t.project_id
-       WHERE search MATCH ? ${options.projectId ? "AND t.project_id = ?" : ""} ${options.doneOnly ? "AND t.column_key = 'done'" : ""}
+       WHERE search MATCH ? ${options.projectId ? "AND t.project_id = ?" : ""} ${options.doneOnly ? "AND t.column_key = 'done'" : ""} ${options.taskKind ? "AND t.kind = ?" : ""}
        ORDER BY rank
        LIMIT 200`,
     )
-    .all(MARK_START, MARK_END, match, ...(options.projectId ? [options.projectId] : [])) as Row[];
+    .all(MARK_START, MARK_END, match, ...(options.projectId ? [options.projectId] : []), ...(options.taskKind ? [options.taskKind] : [])) as Row[];
 
   const seen = new Set<number>();
   const hits: SearchHit[] = [];

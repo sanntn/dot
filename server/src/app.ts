@@ -433,6 +433,15 @@ export function createApp(
     );
   });
 
+  // The views that look across tasks. Each takes an optional projectId.
+  const scope = (c: Context) => {
+    const projectId = Number(c.req.query("projectId"));
+    return Number.isInteger(projectId) && projectId > 0 ? projectId : undefined;
+  };
+  app.get("/documents", (c) => c.json(store.listDocuments({ projectId: scope(c), q: c.req.query("q") ?? "" })));
+  app.get("/triage", (c) => c.json(store.listTriage({ projectId: scope(c) })));
+  app.get("/feed", (c) => c.json(store.listFeed({ projectId: scope(c), scheduledOnly: c.req.query("scheduled") === "1" })));
+
   // Disk usage, and cleanup of finished tasks' worktrees and orphan folders.
   app.get("/storage", async (c) => {
     if (!options.storage) throw new HttpError(404, "Storage is not set up");

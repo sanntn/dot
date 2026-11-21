@@ -353,6 +353,10 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX schedules_project ON schedules(project_id);
   CREATE INDEX schedules_due ON schedules(next_run_at) WHERE enabled = 1;
   `,
+  `
+  -- The schedule that made a task, so the Feed can show and filter what recurring jobs produced.
+  ALTER TABLE tasks ADD COLUMN schedule_id INTEGER REFERENCES schedules(id) ON DELETE SET NULL;
+  `,
 ];
 
 export type Db = DatabaseSync;

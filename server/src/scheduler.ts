@@ -57,14 +57,17 @@ export class Scheduler {
       }
     }
 
-    const task = store.createTask({
-      projectId: schedule.projectId,
-      title: `${schedule.title} (${localDate(at)})`,
-      description: schedule.description,
-      kind: schedule.kind,
-      blockedBy: [],
-      autoStart: false,
-    });
+    const task = store.createTask(
+      {
+        projectId: schedule.projectId,
+        title: `${schedule.title} (${localDate(at)})`,
+        description: schedule.description,
+        kind: schedule.kind,
+        blockedBy: [],
+        autoStart: false,
+      },
+      schedule.id,
+    );
     // The task exists now, so nothing after this may throw, or the firing would not link to it.
     try {
       store.addMessage({

@@ -30,7 +30,10 @@ import type {
   TaskMove,
   TaskPatch,
   TaskEvent,
+  DocumentEntry,
+  FeedItem,
   Output,
+  TriageEntry,
   Schedule,
   ScheduleInput,
   SchedulePatch,
@@ -94,6 +97,19 @@ export const api = {
     if (filter.kind) params.set("kind", filter.kind);
     if (filter.q?.trim()) params.set("q", filter.q);
     return request<Output[]>(`/outputs?${params}`);
+  },
+  documents: (filter: { projectId?: number; q?: string }) => {
+    const params = new URLSearchParams();
+    if (filter.projectId) params.set("projectId", String(filter.projectId));
+    if (filter.q?.trim()) params.set("q", filter.q);
+    return request<DocumentEntry[]>(`/documents?${params}`);
+  },
+  triageQueue: (projectId?: number) => request<TriageEntry[]>(`/triage${projectId ? `?projectId=${projectId}` : ""}`),
+  feed: (filter: { projectId?: number; scheduledOnly?: boolean }) => {
+    const params = new URLSearchParams();
+    if (filter.projectId) params.set("projectId", String(filter.projectId));
+    if (filter.scheduledOnly) params.set("scheduled", "1");
+    return request<FeedItem[]>(`/feed?${params}`);
   },
   overview: () => request<ProjectOverview[]>("/overview"),
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),

@@ -7,8 +7,11 @@ import type {
   ChatMessage,
   ChatRole,
   Column,
+  DocumentEntry,
+  FeedItem,
   Frequency,
   Output,
+  TriageEntry,
   Schedule,
   SchedulePatchSchema,
   ScheduleInputSchema,
@@ -42,7 +45,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
-import { DEFAULT_KIND, kindDef, nextRun, OUTPUTS_LIMIT, taskKindsFor } from "@dot/shared";
+import { DEFAULT_KIND, kindDef, nextRun, OUTPUTS_LIMIT, reportDocHeadline, taskKindsFor } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -305,6 +308,93 @@ export class Store {
     });
   }
 
+  // Report tasks that have a document, most recently written first. `q` searches only report tasks.
+  listDocuments(options: { projectId?: number; q?: string; limit?: number } = {}): DocumentEntry[] {
+    const where = ["t.kind = 'report'"];
+    const args: (string | number)[] = [];
+    if (options.projectId) {
+      where.push("t.project_id = ?");
+      args.push(options.projectId);
+    }
+    if (options.q?.trim()) {
+      const ids = [...new Set(searchTasks(this.db, options.q, { projectId: options.projectId, limit: 200, taskKind: "report" }).map((h) => h.taskId))];
+      if (ids.length === 0) return [];
+      where.push(`t.id IN (${ids.map(() => "?").join(",")})`);
+      args.push(...ids);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT t.id, p.name AS project_name, (SELECT MAX(a.created_at) FROM artifacts a WHERE a.task_id = t.id AND a.type = 'document') AS written
+         FROM tasks t JOIN projects p ON p.id = t.project_id
+         WHERE ${where.join(" AND ")} AND EXISTS (SELECT 1 FROM artifacts a WHERE a.task_id = t.id AND a.type = 'document')
+         ORDER BY written DESC, t.id DESC LIMIT ?`,
+      )
+      .all(...args, Math.min(options.limit ?? OUTPUTS_LIMIT, 500)) as Row[];
+    return rows.flatMap((row) => {
+      const doc = this.latestReportDoc(row.id as number);
+      if (!doc) return [];
+      return [
+        {
+          task: this.getTask(row.id as number),
+          projectName: row.project_name as string,
+          version: doc.version,
+          headline: reportDocHeadline(doc.report),
+          summary: doc.report.summary,
+          updatedAt: doc.createdAt,
+        },
+      ];
+    });
+  }
+
+  // Triage tasks waiting in Triage review, oldest first, with what the agent proposed.
+  listTriage(options: { projectId?: number } = {}): TriageEntry[] {
+    const entries: TriageEntry[] = [];
+    for (const task of this.listTasksInColumns(["triage_review"])) {
+      if (options.projectId && task.projectId !== options.projectId) continue;
+      const artifact = this.latestProposals(task.id);
+      if (artifact) entries.push({ task, projectName: this.getProject(task.projectId).name, artifact });
+    }
+    return entries.sort((a, b) => a.artifact.createdAt.localeCompare(b.artifact.createdAt));
+  }
+
+  // What happened to tasks, newest first: made, needs you, failed, and moves into a gate or Done.
+  listFeed(options: { projectId?: number; scheduledOnly?: boolean; limit?: number } = {}): FeedItem[] {
+    const where: string[] = ["(f.event != 'moved' OR f.detail IN ('done', 'plan_review', 'merge_approval', 'report_review', 'triage_review'))"];
+    const args: (string | number)[] = [];
+    if (options.projectId) {
+      where.push("t.project_id = ?");
+      args.push(options.projectId);
+    }
+    if (options.scheduledOnly) where.push("t.schedule_id IS NOT NULL");
+    const rows = this.db
+      .prepare(
+        `SELECT f.at, f.event, f.detail, t.id AS task_id, t.project_id, t.number, t.title, t.kind, p.name AS project_name, s.name AS schedule_name
+         FROM (
+           SELECT created_at AS at, 'created' AS event, '' AS detail, id AS task_id, 0 AS seq FROM tasks
+           UNION ALL
+           SELECT created_at, kind, detail, task_id, id FROM task_events
+         ) f
+         JOIN tasks t ON t.id = f.task_id
+         JOIN projects p ON p.id = t.project_id
+         LEFT JOIN schedules s ON s.id = t.schedule_id
+         WHERE ${where.join(" AND ")}
+         ORDER BY f.at DESC, t.id DESC, f.seq DESC LIMIT ?`,
+      )
+      .all(...args, Math.min(options.limit ?? 100, 500)) as Row[];
+    return rows.map((row) => ({
+      at: row.at as string,
+      event: row.event as FeedItem["event"],
+      detail: row.detail as FeedItem["detail"],
+      taskId: row.task_id as number,
+      projectId: row.project_id as number,
+      projectName: row.project_name as string,
+      number: row.number as number,
+      title: row.title as string,
+      kind: row.kind as TaskKind,
+      schedule: (row.schedule_name as string | null) ?? null,
+    }));
+  }
+
   listProjects(): Project[] {
     const rows = this.db.prepare("SELECT * FROM projects ORDER BY name COLLATE NOCASE").all() as Row[];
     return rows.map(toProject);
@@ -377,7 +467,7 @@ export class Store {
     return toTask(row);
   }
 
-  createTask(data: TaskData): Task {
+  createTask(data: TaskData, scheduleId: number | null = null): Task {
     const project = this.getProject(data.projectId);
     const kind = data.kind ?? DEFAULT_KIND;
     if (!taskKindsFor(project.kind).includes(kind)) {
@@ -394,10 +484,10 @@ export class Store {
       this.db.prepare("UPDATE projects SET next_task_number = ? WHERE id = ?").run(counter.n + 1, data.projectId);
       const result = this.db
         .prepare(
-          `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?)`,
+          `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, schedule_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?, ?)`,
         )
-        .run(data.projectId, counter.n, data.title, data.description, kind, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
+        .run(data.projectId, counter.n, data.title, data.description, kind, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, scheduleId, stamp, stamp);
       const newId = Number(result.lastInsertRowid);
       this.setBlockers(newId, data.projectId, data.blockedBy);
       return newId;
