@@ -329,6 +329,30 @@ export const MIGRATIONS: string[] = [
   -- A project is a repository or a workspace. A workspace has no repository, so repo_path holds the scratch folder Dot made for it.
   ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo';
   `,
+  `
+  -- A schedule makes a task on a rhythm and starts its research. last_task_id is the task of the last firing,
+  -- so the next firing can wait until that task is done.
+  CREATE TABLE schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'code',
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    frequency TEXT NOT NULL,
+    hour INTEGER NOT NULL DEFAULT 9,
+    minute INTEGER NOT NULL DEFAULT 0,
+    weekday INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    next_run_at TEXT,
+    last_run_at TEXT,
+    last_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    last_note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX schedules_project ON schedules(project_id);
+  CREATE INDEX schedules_due ON schedules(next_run_at) WHERE enabled = 1;
+  `,
 ];
 
 export type Db = DatabaseSync;

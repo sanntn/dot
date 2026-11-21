@@ -1,10 +1,11 @@
-import type { StorageReport, TaskTemplate } from "@dot/shared";
+import type { ProjectKind, StorageReport, TaskTemplate } from "@dot/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api, errorMessage } from "./api.ts";
 import { setFullDetail, useFullDetail } from "./detail.tsx";
 import { RulesSection } from "./RulesSection.tsx";
+import { SchedulesSection } from "./SchedulesSection.tsx";
 import { notificationsEnabled, notificationsSupported, setNotifications } from "./notifications.ts";
 
 export function formatBytes(bytes: number): string {
@@ -110,7 +111,7 @@ function StorageSection() {
   );
 }
 
-export function PreferencesDialog({ projectId, onClose }: { projectId: number | null; onClose: () => void }) {
+export function PreferencesDialog({ projectId, projectKind = "repo", onClose }: { projectId: number | null; projectKind?: ProjectKind; onClose: () => void }) {
   const [on, setOn] = useState(notificationsEnabled);
   const fullDetail = useFullDetail();
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
@@ -148,7 +149,7 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Preferences</DialogTitle>
-          <DialogDescription>Notifications and detail apply to this browser. Rules and templates belong to the project.</DialogDescription>
+          <DialogDescription>Notifications and detail apply to this browser. Rules, schedules and templates belong to the project.</DialogDescription>
         </DialogHeader>
 
         <section className="grid gap-2" aria-labelledby="notify-heading">
@@ -185,6 +186,8 @@ export function PreferencesDialog({ projectId, onClose }: { projectId: number | 
         </section>
 
         {projectId !== null && <RulesSection projectId={projectId} />}
+
+        {projectId !== null && <SchedulesSection projectId={projectId} projectKind={projectKind} />}
 
         <StorageSection />
 

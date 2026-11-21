@@ -7,6 +7,10 @@ import type {
   ChatMessage,
   ChatRole,
   Column,
+  Frequency,
+  Schedule,
+  SchedulePatchSchema,
+  ScheduleInputSchema,
   ProjectKind,
   ProposalDecision,
   Proposals,
@@ -37,7 +41,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
-import { DEFAULT_KIND, kindDef, taskKindsFor } from "@dot/shared";
+import { DEFAULT_KIND, kindDef, nextRun, taskKindsFor } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -164,6 +168,27 @@ function toTemplate(row: Row): TaskTemplate {
   };
 }
 
+function toSchedule(row: Row): Schedule {
+  return {
+    id: row.id as number,
+    projectId: row.project_id as number,
+    name: row.name as string,
+    kind: row.kind as TaskKind,
+    title: row.title as string,
+    description: row.description as string,
+    frequency: row.frequency as Frequency,
+    hour: row.hour as number,
+    minute: row.minute as number,
+    weekday: row.weekday as number,
+    enabled: row.enabled === 1,
+    nextRunAt: row.next_run_at as string | null,
+    lastRunAt: row.last_run_at as string | null,
+    lastTaskId: row.last_task_id as number | null,
+    lastNote: row.last_note as string,
+    createdAt: row.created_at as string,
+  };
+}
+
 function toRun(row: Row): Run {
   return {
     id: row.id as number,
@@ -274,6 +299,11 @@ export class Store {
 
   setAutoStart(id: number, on: boolean): void {
     this.db.prepare("UPDATE tasks SET auto_start = ? WHERE id = ?").run(on ? 1 : 0, id);
+  }
+
+  findTask(id: number): Task | null {
+    const row = this.db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as Row | undefined;
+    return row ? toTask(row) : null;
   }
 
   getTask(id: number): Task {
@@ -803,6 +833,87 @@ export class Store {
   deleteTemplate(id: number): void {
     const result = this.db.prepare("DELETE FROM task_templates WHERE id = ?").run(id);
     if (result.changes === 0) throw notFound("Template");
+  }
+
+  // Schedules
+
+  listSchedules(projectId: number): Schedule[] {
+    this.getProject(projectId);
+    const rows = this.db.prepare("SELECT * FROM schedules WHERE project_id = ? ORDER BY name, id").all(projectId) as Row[];
+    return rows.map(toSchedule);
+  }
+
+  getSchedule(id: number): Schedule {
+    const row = this.db.prepare("SELECT * FROM schedules WHERE id = ?").get(id) as Row | undefined;
+    if (!row) throw notFound("Schedule");
+    return toSchedule(row);
+  }
+
+  addSchedule(projectId: number, input: z.output<typeof ScheduleInputSchema>): Schedule {
+    const project = this.getProject(projectId);
+    if (!taskKindsFor(project.kind).includes(input.kind)) {
+      throw new HttpError(400, `A ${project.kind} project cannot hold ${kindDef(input.kind).label.toLowerCase()} tasks`);
+    }
+    const stamp = new Date();
+    const result = this.db
+      .prepare(
+        `INSERT INTO schedules (project_id, name, kind, title, description, frequency, hour, minute, weekday, enabled, next_run_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        projectId,
+        input.name,
+        input.kind,
+        input.title,
+        input.description,
+        input.frequency,
+        input.hour,
+        input.minute,
+        input.weekday,
+        input.enabled ? 1 : 0,
+        input.enabled ? nextRun(input, stamp).toISOString() : null,
+        stamp.toISOString(),
+      );
+    return this.getSchedule(Number(result.lastInsertRowid));
+  }
+
+  updateSchedule(id: number, patch: z.output<typeof SchedulePatchSchema>): Schedule {
+    const current = this.getSchedule(id);
+    const next = { ...current, ...patch };
+    // A changed rhythm or a switch back on schedules from now. Otherwise the planned time stands.
+    const rescheduled = next.enabled && (!current.enabled || patch.frequency !== undefined || patch.hour !== undefined || patch.minute !== undefined || patch.weekday !== undefined);
+    const nextRunAt = !next.enabled ? null : rescheduled ? nextRun(next, new Date()).toISOString() : current.nextRunAt;
+    this.db
+      .prepare(
+        `UPDATE schedules SET name = ?, title = ?, description = ?, frequency = ?, hour = ?, minute = ?, weekday = ?, enabled = ?, next_run_at = ?
+         WHERE id = ?`,
+      )
+      .run(next.name, next.title, next.description, next.frequency, next.hour, next.minute, next.weekday, next.enabled ? 1 : 0, nextRunAt, id);
+    return this.getSchedule(id);
+  }
+
+  deleteSchedule(id: number): void {
+    const result = this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
+    if (result.changes === 0) throw notFound("Schedule");
+  }
+
+  // Enabled schedules whose time has come.
+  dueSchedules(at: Date): Schedule[] {
+    const rows = this.db
+      .prepare("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at, id")
+      .all(at.toISOString()) as Row[];
+    return rows.map(toSchedule);
+  }
+
+  // Notes a firing. A timed one also plans the next from now, so downtime never causes a burst of catch-up runs.
+  // A manual one leaves the plan alone.
+  recordFiring(id: number, firing: { at: Date; taskId: number | null; note: string; manual: boolean }): Schedule {
+    const current = this.getSchedule(id);
+    const nextRunAt = firing.manual ? current.nextRunAt : current.enabled ? nextRun(current, firing.at).toISOString() : null;
+    this.db
+      .prepare("UPDATE schedules SET last_run_at = ?, last_task_id = COALESCE(?, last_task_id), last_note = ?, next_run_at = ? WHERE id = ?")
+      .run(firing.at.toISOString(), firing.taskId, firing.note, nextRunAt, id);
+    return this.getSchedule(id);
   }
 
   getAttachment(id: number): Attachment {

@@ -30,6 +30,9 @@ import type {
   TaskMove,
   TaskPatch,
   TaskEvent,
+  Schedule,
+  ScheduleInput,
+  SchedulePatch,
   TaskTemplate,
   TemplateInput,
 } from "@dot/shared";
@@ -98,6 +101,12 @@ export const api = {
   addTemplate: (projectId: number, input: TemplateInput) =>
     request<TaskTemplate>(`/projects/${projectId}/templates`, "POST", input),
   deleteTemplate: (id: number) => request<void>(`/templates/${id}`, "DELETE"),
+  listSchedules: (projectId: number) => request<Schedule[]>(`/projects/${projectId}/schedules`),
+  addSchedule: (projectId: number, input: ScheduleInput) =>
+    request<Schedule>(`/projects/${projectId}/schedules`, "POST", input),
+  updateSchedule: (id: number, patch: SchedulePatch) => request<Schedule>(`/schedules/${id}`, "PATCH", patch),
+  deleteSchedule: (id: number) => request<void>(`/schedules/${id}`, "DELETE"),
+  runSchedule: (id: number) => request<{ task: Task; schedule: Schedule }>(`/schedules/${id}/run`, "POST"),
   updateTask: (id: number, patch: TaskPatch) => request<Task>(`/tasks/${id}`, "PATCH", patch),
   moveTask: (id: number, move: TaskMove) => request<Task>(`/tasks/${id}/move`, "POST", move),
   deleteTask: (id: number) => request<void>(`/tasks/${id}`, "DELETE"),

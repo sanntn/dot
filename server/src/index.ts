@@ -15,6 +15,7 @@ import { agentDir, isolated, verifyIsolation } from "./isolation.ts";
 import { startNotifier } from "./notify.ts";
 import { Orchestrator } from "./orchestrator.ts";
 import { loadSecretFiles, secretsInEnvFile } from "./secrets.ts";
+import { Scheduler } from "./scheduler.ts";
 import { Store } from "./store.ts";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -111,6 +112,11 @@ const orchestrator = new Orchestrator(store, bus, {
 orchestrator.recover();
 orchestrator.startUnblocked();
 
+// Tasks made on a rhythm. A schedule that came due while Dot was off fires once on startup, not once per missed run.
+const scheduler = new Scheduler({ store, bus, start: (taskId) => void orchestrator.startResearch(taskId) });
+scheduler.tick();
+process.on("exit", scheduler.start());
+
 // A message to a webhook when a task starts waiting for you. Off unless DOT_NOTIFY_URL is set.
 const notifyUrl = process.env.DOT_NOTIFY_URL?.trim();
 if (notifyUrl) {
@@ -134,6 +140,7 @@ const api = createApp(store, bus, orchestrator, {
   attachmentsDir: resolve(dataDir, "attachments"),
   reposDir,
   workspacesDir,
+  scheduler,
   // In the Docker image each folder is handed to the agent user, so its agents can work in it.
   prepareAgentFolder: isolated ? agentDir : undefined,
   storage: { worktreesDir, dbFile, backupsDir, attachmentsDir: resolve(dataDir, "attachments") },

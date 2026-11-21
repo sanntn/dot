@@ -28,6 +28,8 @@ import {
   TaskInputSchema,
   RuleInputSchema,
   RulePatchSchema,
+  ScheduleInputSchema,
+  SchedulePatchSchema,
   TemplateInputSchema,
   TaskMoveSchema,
   TaskPatchSchema,
@@ -38,6 +40,7 @@ import { z } from "zod";
 import type { EventBus } from "./events.ts";
 import { claudeAccount, claudeLoginStatus, claudeTokenFor, claudeTokens, startClaudeLogin } from "./agents/claude.ts";
 import type { Auth } from "./auth.ts";
+import type { Scheduler } from "./scheduler.ts";
 import { HttpError, notFound } from "./errors.ts";
 import { branchDiff, branchExistsLocally, cloneRepo, gitError, resolveBaseRef } from "./git.ts";
 import { GitHub } from "./github.ts";
@@ -143,7 +146,7 @@ export function createApp(
   store: Store,
   bus: EventBus,
   orchestrator: Orchestrator,
-  options: { attachmentsDir: string; reposDir: string; workspacesDir?: string; prepareAgentFolder?: (folder: string) => void; auth: Auth; allowedHosts?: string[]; storage?: StoragePaths },
+  options: { attachmentsDir: string; reposDir: string; workspacesDir?: string; prepareAgentFolder?: (folder: string) => void; scheduler?: Scheduler; auth: Auth; allowedHosts?: string[]; storage?: StoragePaths },
 ) {
   const extraHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
   const app = new Hono().basePath("/api");
@@ -459,6 +462,22 @@ export function createApp(
   app.delete("/templates/:id", (c) => {
     store.deleteTemplate(idParam(c));
     return c.body(null, 204);
+  });
+
+  // Schedules make a task on a rhythm and start its research.
+  app.get("/projects/:id/schedules", (c) => c.json(store.listSchedules(idParam(c))));
+  app.post("/projects/:id/schedules", async (c) =>
+    c.json(store.addSchedule(idParam(c), await parseBody(c, ScheduleInputSchema)), 201),
+  );
+  app.patch("/schedules/:id", async (c) => c.json(store.updateSchedule(idParam(c), await parseBody(c, SchedulePatchSchema))));
+  app.delete("/schedules/:id", (c) => {
+    store.deleteSchedule(idParam(c));
+    return c.body(null, 204);
+  });
+  app.post("/schedules/:id/run", (c) => {
+    if (!options.scheduler) throw new HttpError(404, "Schedules are not set up");
+    const task = options.scheduler.runNow(idParam(c));
+    return c.json({ task, schedule: store.getSchedule(idParam(c)) }, 201);
   });
 
   app.patch("/tasks/:id", async (c) => {
