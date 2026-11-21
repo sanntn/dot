@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   MAX_REVIEW_ROUNDS,
+  KINDS,
   STAGE_LABELS,
+  stageColumn,
   type AgentStage,
   type ChatMessage,
   type Column,
@@ -72,13 +74,6 @@ export type OrchestratorConfig = {
   stuckCheckMs?: number;
   // Longest a single project check may run. Defaults to 10 minutes.
   checkTimeoutMs?: number;
-};
-
-// The column a stage's agent works in. Outside it, the agent is only chatting.
-const STAGE_COLUMN: Record<AgentStage, Column> = {
-  research: "research",
-  execute: "execute",
-  review: "review",
 };
 
 type StageConfig = {
@@ -243,7 +238,9 @@ export class Orchestrator {
     else if (this.store.latestReview(taskId)?.reportVersion === this.store.latestExecutionReport(taskId)?.version) {
       this.store.setReviewRound(taskId, Math.max(0, task.reviewRound - 1));
     }
-    if (task.column !== STAGE_COLUMN[stage]) this.store.moveTask(taskId, { column: STAGE_COLUMN[stage], beforeTaskId: null });
+    const stageCol = stageColumn(task.kind, stage);
+    if (!stageCol) throw new HttpError(409, `A ${KINDS[task.kind].label.toLowerCase()} has no ${STAGE_LABELS[stage].toLowerCase()} stage`);
+    if (task.column !== stageCol) this.store.moveTask(taskId, { column: stageCol, beforeTaskId: null });
     const note = `Retrying the ${STAGE_LABELS[stage].toLowerCase()} with a new session.`;
     if (stage === "research") return this.beginResearch(this.store.getTask(taskId), project, note);
     this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: note });
@@ -295,7 +292,7 @@ export class Orchestrator {
     this.store.markQuestionsAnswered(run.id);
     if (task.needsInput) this.store.setNeedsInput(taskId, false);
 
-    const expectOutcome = task.column === STAGE_COLUMN[input.stage];
+    const expectOutcome = task.column === stageColumn(task.kind, input.stage);
     this.dispatch(run.id, buildContent(input.text, attachments), expectOutcome);
     this.publish(taskId);
     return message;
@@ -610,6 +607,7 @@ ${checksSummary(results)}` });
       projectId: task.projectId,
       title: input.title,
       description,
+      kind: task.kind,
       blockedBy: [taskId],
       autoStart: true,
     });
@@ -744,7 +742,7 @@ ${checksSummary(results)}` });
       this.store.updateRun(run.id, { status: "idle" });
       const task = this.store.getTask(run.taskId);
       // An executor that was only finishing its turn after its report doesn't need you.
-      if (task.column !== STAGE_COLUMN[run.stage]) {
+      if (task.column !== stageColumn(task.kind, run.stage)) {
         this.store.setAgentState(run.taskId, task.needsInput ? "waiting" : "idle");
         continue;
       }
@@ -904,7 +902,7 @@ ${checksSummary(results)}` });
     const project = this.store.getProject(task.projectId);
     // Outside its own column an agent is only chatting, so it gets read-only tools.
     // That keeps a past-stage agent from touching a worktree another agent is working in.
-    const working = task.column === STAGE_COLUMN[run.stage];
+    const working = task.column === stageColumn(task.kind, run.stage);
     const readOnly: StageConfig = {
       ...STAGE_CONFIG[run.stage],
       tools: RESEARCHER_TOOLS,
@@ -1124,7 +1122,8 @@ ${checksSummary(results)}` });
     if (live.turnsInFlight > 0) return;
     if (live.stopped || !live.expectOutcome || live.outcome) return;
     const run = this.store.getRun(live.runId);
-    if (this.store.getTask(live.taskId).column !== STAGE_COLUMN[run.stage]) return;
+    const current = this.store.getTask(live.taskId);
+    if (current.column !== stageColumn(current.kind, run.stage)) return;
 
     if (!live.nudged) {
       live.nudged = true;

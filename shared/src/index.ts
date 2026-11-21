@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { DEFAULT_KIND, KINDS, TASK_KINDS } from "./kinds.ts";
+
+export * from "./kinds.ts";
 
 // Board columns, in order. Agents will move cards through these in later steps.
 export const COLUMNS = [
@@ -188,6 +191,7 @@ export const TaskSchema = z.object({
   number: z.number().int(),
   title: z.string(),
   description: z.string(),
+  kind: z.enum(TASK_KINDS),
   column: ColumnSchema,
   position: z.number(),
   needsInput: z.boolean(),
@@ -212,11 +216,12 @@ export type Task = z.infer<typeof TaskSchema>;
 export const LANES = ["inbox", "working", "needs_you", "done"] as const;
 export type Lane = (typeof LANES)[number];
 
-// A task waits for you at plan review, at merge approval, or whenever its agent has a question or failed.
-export function laneOf(task: Pick<Task, "column" | "needsInput" | "agentState">): Lane {
+// A task waits for you at its kind's gate columns (plan review and merge approval for code),
+// or whenever its agent has a question or failed.
+export function laneOf(task: Pick<Task, "kind" | "column" | "needsInput" | "agentState">): Lane {
   if (task.column === "inbox") return "inbox";
   if (task.column === "done") return "done";
-  if (task.column === "plan_review" || task.column === "merge_approval") return "needs_you";
+  if (KINDS[task.kind].gates.includes(task.column)) return "needs_you";
   if (task.needsInput || task.agentState === "failed") return "needs_you";
   return "working";
 }
@@ -261,6 +266,7 @@ export const TaskInputSchema = z.object({
   projectId: z.number().int().positive(),
   title: z.string().trim().min(1, "Title is required").max(200),
   description: z.string().max(20000).default(""),
+  kind: z.enum(TASK_KINDS).default(DEFAULT_KIND),
   blockedBy: z.array(z.number().int().positive()).max(20).default([]),
   autoStart: z.boolean().optional(),
 });

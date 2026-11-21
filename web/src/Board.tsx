@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { LANE_ENTRY, LANE_LABELS, LANES, canRetry, canStart, isActive, laneOf, statusLine, stepOf, type Lane } from "./lanes.ts";
+import { laneEntry, LANE_LABELS, LANES, canRetry, canStart, isActive, laneOf, statusLine, stepOf, type Lane } from "./lanes.ts";
 import { byPosition } from "./move.ts";
 
 // Needs you is the only lane that waits on a person, so it gets the warm dot and tint.
@@ -143,7 +143,7 @@ export function Board(props: {
     if (!laneEl) return null;
     const lane = laneEl.dataset.lane as Lane;
     // Inside its own lane a card keeps its column. In another lane it enters at that lane's first column.
-    const column = lane === laneOf(task) ? task.column : LANE_ENTRY[lane];
+    const column = lane === laneOf(task) ? task.column : laneEntry(task, lane);
 
     let beforeTaskId: number | null = null;
     for (const card of laneEl.querySelectorAll<HTMLElement>("[data-task-id]")) {
@@ -275,12 +275,12 @@ export function Board(props: {
     switch (e.key) {
       case "ArrowLeft": {
         const lane = LANES[laneIndex - 1];
-        if (lane) move = { column: LANE_ENTRY[lane], beforeTaskId: null };
+        if (lane) move = { column: laneEntry(task, lane), beforeTaskId: null };
         break;
       }
       case "ArrowRight": {
         const lane = LANES[laneIndex + 1];
-        if (lane) move = { column: LANE_ENTRY[lane], beforeTaskId: null };
+        if (lane) move = { column: laneEntry(task, lane), beforeTaskId: null };
         break;
       }
       case "ArrowUp": {
@@ -381,7 +381,7 @@ export function Board(props: {
                   onMoveToLane={(target) => {
                     // On a phone only one lane shows. Follow the card there, or it would seem to vanish.
                     setPicked(target);
-                    onMove(task, { column: LANE_ENTRY[target], beforeTaskId: null });
+                    onMove(task, { column: laneEntry(task, target), beforeTaskId: null });
                   }}
                   onPointerDown={(e) => onPointerDown(e, task)}
                   onPointerMove={onPointerMove}

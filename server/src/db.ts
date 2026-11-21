@@ -306,6 +306,10 @@ const MIGRATIONS: string[] = [
     DELETE FROM search WHERE rowid = old.id * 4 + 2;
   END;
   `,
+  `
+  -- What the task is for. It picks the columns, stages and gates the task goes through. Existing tasks are code changes.
+  ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'code';
+  `,
 ];
 
 export type Db = DatabaseSync;

@@ -152,3 +152,18 @@ Each step leaves a working app. After step 2 you can already use Dot as a planni
 ## Bitbucket auth
 
 Dot reads an Atlassian API token from `.env` with read and write scopes for repositories and pull requests. Pushing uses your existing git credentials in each repo. Neither ever reaches an agent.
+
+## Task kinds (beyond pull requests)
+
+A task has a kind. The kind decides which columns the task passes through, which agent stages run, which columns wait for you, and what counts as done. `shared/src/kinds.ts` holds the registry. The `code` kind is the pipeline above, and it is the only kind so far. Existing tasks migrate to `code`. `tasks.kind` holds the value.
+
+Phases, each shippable on its own:
+
+0. Kinds registry (done). `tasks.kind`, `KINDS`, and the orchestrator, lanes and board read gates, steps and stage columns from the kind. No behavior change for `code`.
+1. Report kind. Columns inbox, research, report_review, done. The researcher's read-only tools, a `submit_report` tool (headline, summary, markdown body, sources, open questions) stored as a `report` artifact with versions. Approve moves the task to done. Send back resumes the session with your notes. A document view replaces the plan panel.
+2. Workspace projects. `repoPath` becomes nullable and a project is either a repo project or a workspace project. A workspace gets a scratch folder at `data/workspaces/<project-id>` as the agent's working folder, and hides branch, merge and token settings. The `code` kind is only offered on repo projects.
+3. Triage kind. Input is pasted text, attached files or a workspace folder. `submit_proposals` returns items (create task, label, drop). A triage queue view accepts or rejects them from the keyboard, and accepting a create-task item uses the existing batch task creation. Nothing runs without an accept.
+4. Schedules. A `schedules` table (project, kind, title, prompt, interval, enabled, last run, per-run budget), seeded from task templates. A server ticker creates the task and auto-starts it. It skips a run while the previous one is still active, and scheduled runs count against `DOT_MAX_AGENTS`. A feed view lists runs.
+5. Outputs. A table of finished results across kinds, filterable by kind and searchable.
+
+Column stays a closed enum. Each new kind adds its columns to it and lists the ones it uses in the registry.

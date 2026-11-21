@@ -11,6 +11,7 @@ import {
   laneOf,
   type Lane,
   type ProjectOverview,
+  DEFAULT_KIND,
   MAX_IMAGE_BYTES,
   MergeSchema,
   PlanSplitSchema,
@@ -403,7 +404,7 @@ export function createApp(
   // Several tasks from a pasted list. One change event, so the board refetches once.
   app.post("/tasks/batch", async (c) => {
     const { projectId, titles } = await parseBody(c, TaskBatchSchema);
-    const tasks = titles.map((title) => store.createTask({ projectId, title, description: "", blockedBy: [] }));
+    const tasks = titles.map((title) => store.createTask({ projectId, title, description: "", kind: DEFAULT_KIND, blockedBy: [] }));
     bus.publish({ type: "tasks.changed", projectId });
     return c.json(tasks, 201);
   });

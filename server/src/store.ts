@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   ChatRole,
   Column,
+  TaskKind,
   Commit,
   ExecutionArtifact,
   ExecutionReport,
@@ -30,6 +31,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
+import { DEFAULT_KIND } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -127,6 +129,7 @@ function toTask(row: Row): Task {
     number: row.number as number,
     title: row.title as string,
     description: row.description as string,
+    kind: row.kind as TaskKind,
     column: row.column_key as Column,
     position: row.position as number,
     needsInput: row.needs_input === 1,
@@ -285,10 +288,10 @@ export class Store {
       this.db.prepare("UPDATE projects SET next_task_number = ? WHERE id = ?").run(counter.n + 1, data.projectId);
       const result = this.db
         .prepare(
-          `INSERT INTO tasks (project_id, number, title, description, column_key, position, auto_start, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'inbox', ?, ?, ?, ?)`,
+          `INSERT INTO tasks (project_id, number, title, description, kind, column_key, position, auto_start, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'inbox', ?, ?, ?, ?)`,
         )
-        .run(data.projectId, counter.n, data.title, data.description, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
+        .run(data.projectId, counter.n, data.title, data.description, data.kind ?? DEFAULT_KIND, (last.max ?? 0) + POSITION_STEP, data.autoStart ? 1 : 0, stamp, stamp);
       const newId = Number(result.lastInsertRowid);
       this.setBlockers(newId, data.projectId, data.blockedBy);
       return newId;
