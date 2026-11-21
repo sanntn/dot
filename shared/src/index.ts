@@ -3,6 +3,7 @@ import { DEFAULT_KIND, kindDef, PROPOSABLE_KINDS, TASK_KINDS } from "./kinds.ts"
 
 export * from "./kinds.ts";
 export * from "./schedules.ts";
+export * from "./outputs.ts";
 
 // Board columns, in order. Agents will move cards through these in later steps.
 export const COLUMNS = [

@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   type Project,
+  type TaskKind,
+  TASK_KINDS,
   ClaudeAccountQuerySchema,
   RemoteQuerySchema,
   IMAGE_TYPES,
@@ -413,6 +415,20 @@ export function createApp(
   app.get("/search", (c) => {
     const projectId = Number(c.req.query("projectId"));
     return c.json(store.search(c.req.query("q") ?? "", Number.isInteger(projectId) && projectId > 0 ? { projectId } : {}));
+  });
+
+  // Finished tasks with what they produced, across kinds. Filter by project, kind or search text.
+  app.get("/outputs", (c) => {
+    const projectId = Number(c.req.query("projectId"));
+    const kind = c.req.query("kind");
+    if (kind && !(TASK_KINDS as readonly string[]).includes(kind)) throw new HttpError(400, "Unknown kind");
+    return c.json(
+      store.listOutputs({
+        projectId: Number.isInteger(projectId) && projectId > 0 ? projectId : undefined,
+        kind: kind as TaskKind | undefined,
+        q: c.req.query("q") ?? "",
+      }),
+    );
   });
 
   // Disk usage, and cleanup of finished tasks' worktrees and orphan folders.

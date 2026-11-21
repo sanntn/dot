@@ -30,6 +30,7 @@ import type {
   TaskMove,
   TaskPatch,
   TaskEvent,
+  Output,
   Schedule,
   ScheduleInput,
   SchedulePatch,
@@ -87,6 +88,13 @@ export const api = {
 
   search: (query: string, signal?: AbortSignal) =>
     send<SearchHit[]>(`/search?q=${encodeURIComponent(query)}`, { signal }),
+  outputs: (filter: { projectId?: number; kind?: TaskKind; q?: string }) => {
+    const params = new URLSearchParams();
+    if (filter.projectId) params.set("projectId", String(filter.projectId));
+    if (filter.kind) params.set("kind", filter.kind);
+    if (filter.q?.trim()) params.set("q", filter.q);
+    return request<Output[]>(`/outputs?${params}`);
+  },
   overview: () => request<ProjectOverview[]>("/overview"),
   listTasks: (projectId: number) => request<Task[]>(`/projects/${projectId}/tasks`),
   createTask: (input: TaskInput) => request<Task>("/tasks", "POST", input),

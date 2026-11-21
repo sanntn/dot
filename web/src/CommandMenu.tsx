@@ -24,12 +24,14 @@ export function buildCommands(input: {
   newTask: (() => void) | null;
   shortcuts: () => void;
   allProjects: () => void;
+  outputs: () => void;
   openTask: (task: Task) => void;
   selectProject: (id: number) => void;
 }): CommandItem[] {
   const items: CommandItem[] = [];
   if (input.newTask) items.push({ id: "new-task", group: "Actions", label: "New task", run: input.newTask });
   if (input.projects.length > 1) items.push({ id: "all-projects", group: "Actions", label: "All projects", run: input.allProjects });
+  items.push({ id: "outputs", group: "Actions", label: "Outputs", run: input.outputs });
   items.push({ id: "shortcuts", group: "Actions", label: "Keyboard shortcuts", run: input.shortcuts });
   for (const task of input.tasks) {
     items.push({

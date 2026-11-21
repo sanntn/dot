@@ -8,6 +8,7 @@ import type {
   ChatRole,
   Column,
   Frequency,
+  Output,
   Schedule,
   SchedulePatchSchema,
   ScheduleInputSchema,
@@ -41,7 +42,7 @@ import type {
   TaskMove,
   TaskPatchSchema,
 } from "@dot/shared";
-import { DEFAULT_KIND, kindDef, nextRun, taskKindsFor } from "@dot/shared";
+import { DEFAULT_KIND, kindDef, nextRun, OUTPUTS_LIMIT, taskKindsFor } from "@dot/shared";
 import type { z } from "zod";
 import { transaction, type Db } from "./db.ts";
 import { HttpError, notFound } from "./errors.ts";
@@ -238,6 +239,70 @@ export class Store {
 
   search(query: string, options: { projectId?: number; limit?: number } = {}) {
     return searchTasks(this.db, query, options);
+  }
+
+  // Finished tasks with their last result, newest first. `q` searches the same text as the board's search.
+  listOutputs(options: { projectId?: number; kind?: TaskKind; q?: string; limit?: number } = {}): Output[] {
+    const where = ["t.column_key = 'done'"];
+    const args: (string | number)[] = [];
+    if (options.projectId) {
+      where.push("t.project_id = ?");
+      args.push(options.projectId);
+    }
+    if (options.kind) {
+      where.push("t.kind = ?");
+      args.push(options.kind);
+    }
+    if (options.q?.trim()) {
+      const ids = [...new Set(searchTasks(this.db, options.q, { projectId: options.projectId, limit: 200, doneOnly: true }).map((h) => h.taskId))];
+      if (ids.length === 0) return [];
+      where.push(`t.id IN (${ids.map(() => "?").join(",")})`);
+      args.push(...ids);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT t.id, t.project_id, t.number, t.title, t.kind, t.pr_url, p.name AS project_name,
+           COALESCE((SELECT e.created_at FROM task_events e WHERE e.task_id = t.id AND e.kind = 'moved' AND e.detail = 'done'
+                     ORDER BY e.id DESC LIMIT 1), t.updated_at) AS finished_at,
+           (SELECT a.payload FROM artifacts a WHERE a.task_id = t.id
+              AND a.type = CASE t.kind WHEN 'report' THEN 'document' WHEN 'triage' THEN 'proposals' ELSE 'execution_report' END
+              ORDER BY a.version DESC LIMIT 1) AS payload
+         FROM tasks t JOIN projects p ON p.id = t.project_id
+         WHERE ${where.join(" AND ")}
+         ORDER BY finished_at DESC, t.id DESC
+         LIMIT ?`,
+      )
+      .all(...args, Math.min(options.limit ?? OUTPUTS_LIMIT, 500)) as Row[];
+    return rows.map((row) => {
+      let result: { headline?: unknown; summary?: unknown } = {};
+      try {
+        result = (row.payload === null ? null : (JSON.parse(row.payload as string) as typeof result | null)) ?? {};
+      } catch {
+        // No result, or a payload this build cannot read. The row still lists the task.
+      }
+      let headline = typeof result.headline === "string" ? result.headline : "";
+      // A triage's outcome is what you accepted, not what the agent proposed.
+      if (row.kind === "triage" && headline) {
+        const proposals = this.latestProposals(row.id as number);
+        if (proposals) {
+          const total = proposals.proposals.items.filter((i) => i.action === "create_task").length;
+          const accepted = Object.values(proposals.decisions).filter((d) => d.status === "accepted").length;
+          headline = `Accepted ${accepted} of ${total} proposed ${total === 1 ? "task" : "tasks"}. ${headline}`;
+        }
+      }
+      return {
+        taskId: row.id as number,
+        projectId: row.project_id as number,
+        projectName: row.project_name as string,
+        number: row.number as number,
+        title: row.title as string,
+        kind: row.kind as TaskKind,
+        headline,
+        summary: typeof result.summary === "string" ? result.summary : "",
+        url: (row.pr_url as string | null) ?? null,
+        finishedAt: row.finished_at as string,
+      };
+    });
   }
 
   listProjects(): Project[] {

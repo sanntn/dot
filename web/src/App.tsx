@@ -1,5 +1,5 @@
 import type { Project, Task, TaskMove } from "@dot/shared";
-import { Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
+import { Archive, Bell, Ellipsis, FolderGit2, FolderPlus, LayoutGrid, Plus, Search, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, errorMessage } from "./api.ts";
 import { AllProjectsDialog } from "./AllProjectsDialog.tsx";
+import { OutputsDialog } from "./OutputsDialog.tsx";
 import { Board } from "./Board.tsx";
 import { buildCommands, CommandMenu } from "./CommandMenu.tsx";
 import { subscribe } from "./events.ts";
@@ -37,6 +38,7 @@ type OpenDialog =
   | { kind: "shortcuts" }
   | { kind: "command" }
   | { kind: "all-projects" }
+  | { kind: "outputs" }
   | { kind: "preferences" }
   | { kind: "new-project" }
   | { kind: "project"; project: Project };
@@ -317,6 +319,10 @@ export function App() {
                 All projects
               </Button>
             )}
+            <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "outputs" })}>
+              <Archive aria-hidden="true" />
+              Outputs
+            </Button>
             <Button variant="ghost" className="justify-start" onClick={() => setDialog({ kind: "new-project" })}>
               <FolderPlus aria-hidden="true" />
               New project
@@ -382,6 +388,17 @@ export function App() {
       {dialog?.kind === "all-projects" && projects && (
         <AllProjectsDialog projects={projects} currentId={projectId} onPick={selectProject} onClose={closeDialog} />
       )}
+      {dialog?.kind === "outputs" && projects && (
+        <OutputsDialog
+          projects={projects}
+          currentId={projectId}
+          onClose={closeDialog}
+          onOpen={(output) => {
+            if (output.projectId !== projectId) selectProject(output.projectId);
+            setDialog({ kind: "task", taskId: output.taskId });
+          }}
+        />
+      )}
       {dialog?.kind === "command" && (
         <CommandMenu
           onClose={closeDialog}
@@ -396,6 +413,7 @@ export function App() {
             newTask: project ? openNewTask : null,
             shortcuts: openShortcuts,
             allProjects: () => setDialog({ kind: "all-projects" }),
+            outputs: () => setDialog({ kind: "outputs" }),
             openTask: (task) => setDialog({ kind: "task", taskId: task.id }),
             selectProject,
           })}
