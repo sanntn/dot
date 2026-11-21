@@ -404,6 +404,7 @@ function actionLabel(task: Task): string | null {
   if (task.needsInput) return "Answer";
   if (task.column === "plan_review") return "Review plan";
   if (task.column === "report_review") return "Read report";
+  if (task.column === "triage_review") return "Review proposals";
   if (task.column === "merge_approval") return "Review";
   return null;
 }

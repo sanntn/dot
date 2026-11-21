@@ -7,6 +7,7 @@ import {
   type ChatMessage,
   type Column,
   type PlanArtifact,
+  type ProposalsArtifact,
   type ReportDocArtifact,
   type ReviewArtifact,
   type Run,
@@ -32,18 +33,20 @@ import { ChatPanel } from "./ChatPanel.tsx";
 import { ConfirmButton } from "./ConfirmButton.tsx";
 import { serialLoader, subscribe } from "./events.ts";
 import { PlanPanel } from "./PlanPanel.tsx";
+import { ProposalsPanel } from "./ProposalsPanel.tsx";
 import { ReportPanel } from "./ReportPanel.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { TaskFields } from "./TaskDialog.tsx";
 import { TaskImages } from "./TaskImages.tsx";
 
-type Tab = "chat" | "plan" | "report" | "changes" | "review" | "activity" | "details";
+type Tab = "chat" | "plan" | "report" | "proposals" | "changes" | "review" | "activity" | "details";
 
 // Which agent belongs to a column. Columns without an agent map to nothing.
 const COLUMN_STAGE: Partial<Record<Column, AgentStage>> = {
   research: "research",
   plan_review: "research",
   report_review: "research",
+  triage_review: "research",
   execute: "execute",
   review: "review",
   merge_approval: "review",
@@ -53,6 +56,7 @@ const COLUMN_STAGE: Partial<Record<Column, AgentStage>> = {
 function initialTab(task: Task): Tab {
   if (task.column === "plan_review") return "plan";
   if (task.column === "report_review") return "report";
+  if (task.column === "triage_review") return "proposals";
   if (task.column === "merge_approval" || (task.column === "review" && task.needsInput)) return "review";
   if (task.column === "merge") return "chat";
   return "chat";
@@ -65,6 +69,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [plan, setPlan] = useState<PlanArtifact | null>(null);
   const [doc, setDoc] = useState<ReportDocArtifact | null>(null);
+  const [proposals, setProposals] = useState<ProposalsArtifact | null>(null);
   const [review, setReview] = useState<ReviewArtifact | null>(null);
   const [reportVersion, setReportVersion] = useState<number | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -75,18 +80,23 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
   const lastMessageId = useRef(0);
 
   const isReport = task.kind === "report";
+  const isTriage = task.kind === "triage";
+  // Plans, execution reports and reviews belong to the kinds that change code.
+  const isCode = !isReport && !isTriage;
   const loadMeta = useMemo(
     () =>
       serialLoader(async () => {
         try {
-          const [p, rv, rp, r, d] = await Promise.all([
-            isReport ? Promise.resolve(null) : api.getPlan(task.id),
-            isReport ? Promise.resolve(null) : api.getReview(task.id),
-            isReport ? Promise.resolve(null) : api.getReport(task.id),
+          const [p, rv, rp, r, d, pr] = await Promise.all([
+            isCode ? api.getPlan(task.id) : Promise.resolve(null),
+            isCode ? api.getReview(task.id) : Promise.resolve(null),
+            isCode ? api.getReport(task.id) : Promise.resolve(null),
             api.listRuns(task.id),
             isReport ? api.getReportDoc(task.id) : Promise.resolve(null),
+            isTriage ? api.getProposals(task.id) : Promise.resolve(null),
           ]);
           setDoc(d);
+          setProposals(pr);
           setPlan(p);
           setReview(rv);
           setReportVersion(rp?.version ?? null);
@@ -95,7 +105,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
           setError(errorMessage(err));
         }
       }),
-    [task.id, isReport],
+    [task.id, isCode, isReport, isTriage],
   );
 
   const loadMessages = useMemo(
@@ -205,7 +215,7 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               : null;
   const canRetry =
     !busy && stagesWithRuns.length > 0 && task.column !== "inbox" && task.column !== "done" && !(task.column === "merge" && working);
-  const showReviewTab = !isReport && (review !== null || task.column === "review" || task.column === "merge_approval");
+  const showReviewTab = isCode && (review !== null || task.column === "review" || task.column === "merge_approval");
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -267,6 +277,12 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               <Button size="sm" onClick={() => setTab("report")}>
                 <FileText aria-hidden="true" />
                 Read report
+              </Button>
+            )}
+            {task.column === "triage_review" && tab !== "proposals" && (
+              <Button size="sm" onClick={() => setTab("proposals")}>
+                <FileText aria-hidden="true" />
+                Review proposals
               </Button>
             )}
             {task.column === "plan_review" && tab !== "plan" && (
@@ -348,11 +364,9 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex min-h-0 flex-1 flex-col gap-0">
           <TabsList className="mx-4 mt-3">
             <TabsTrigger value="chat">Chat</TabsTrigger>
-            {isReport ? (
-              <TabsTrigger value="report">Report{doc ? ` v${doc.version}` : ""}</TabsTrigger>
-            ) : (
-              <TabsTrigger value="plan">Plan{plan ? ` v${plan.version}` : ""}</TabsTrigger>
-            )}
+            {isReport && <TabsTrigger value="report">Report{doc ? ` v${doc.version}` : ""}</TabsTrigger>}
+            {isTriage && <TabsTrigger value="proposals">Proposals{proposals ? ` v${proposals.version}` : ""}</TabsTrigger>}
+            {isCode && <TabsTrigger value="plan">Plan{plan ? ` v${plan.version}` : ""}</TabsTrigger>}
             {task.branch && <TabsTrigger value="changes">Changes</TabsTrigger>}
             {showReviewTab && <TabsTrigger value="review">Review{review ? ` ${review.version}` : ""}</TabsTrigger>}
             <TabsTrigger value="activity">Activity</TabsTrigger>
@@ -396,11 +410,17 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               <ChangesPanel task={task} active={tab === "changes"} version={messages.length + runs.length} />
             )}
           </TabsContent>
-          {isReport ? (
+          {isReport && (
             <TabsContent value="report" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
               <ReportPanel task={task} artifact={doc} />
             </TabsContent>
-          ) : (
+          )}
+          {isTriage && (
+            <TabsContent value="proposals" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+              <ProposalsPanel task={task} artifact={proposals} active={tab === "proposals"} />
+            </TabsContent>
+          )}
+          {isCode && (
             <TabsContent value="plan" forceMount className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
               <PlanPanel task={task} artifact={plan} />
             </TabsContent>

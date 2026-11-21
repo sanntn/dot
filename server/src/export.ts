@@ -50,6 +50,17 @@ export function taskMarkdown(store: Store, taskId: number): string {
     );
   }
 
+  const triage = store.latestProposals(taskId);
+  if (triage) {
+    const t = triage.proposals;
+    const line = (item: (typeof t.items)[number], i: number) => {
+      const decision = triage.decisions[i];
+      const state = decision?.status === "accepted" ? `accepted as task #${decision.taskId}` : decision?.status === "rejected" ? "rejected" : item.action === "drop" ? "dropped" : "undecided";
+      return `**${item.title}** (${state}). ${item.reason}`;
+    };
+    parts.push(section(`Proposals (version ${triage.version})`, [`**${t.headline}**`, t.summary, bullets(t.items.map(line))].join("\n\n")));
+  }
+
   if (plan) {
     const p = plan.plan;
     parts.push(

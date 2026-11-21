@@ -571,6 +571,97 @@ test("approving a report ends the agent's work and clears the question flag", as
   assert.notEqual(h.store.getTask(task.id).agentState, "running");
 });
 
+const proposals = (headline: string, items?: object[]) => ({
+  headline,
+  summary: "Three things in the notes.",
+  items: items ?? [
+    { action: "create_task", title: "Fix the login redirect", description: "Users land on a 404 after login.", taskKind: "code", reason: "A clear bug." },
+    { action: "create_task", title: "Compare hosting options", taskKind: "report", reason: "Needs research first." },
+    { action: "drop", title: "Lunch order", reason: "Not work." },
+  ],
+});
+
+test("a triage task proposes tasks, and only the ones you accept are created, in the inbox", async () => {
+  const h = await harness([
+    {
+      name: "triager",
+      turns: [
+        [{ tool: "submit_proposals", args: proposals("Two tasks and one drop.") }],
+        [{ tool: "submit_proposals", args: proposals("Revised.") }],
+      ],
+    },
+    { name: "triager again", turns: [[{ tool: "submit_proposals", args: proposals("Revised.") }]] },
+  ]);
+  const projectId = h.task.projectId;
+  const task = h.store.createTask({ projectId, title: "Triage the notes", description: "- fix login\n- compare hosts\n- lunch", kind: "triage", blockedBy: [] });
+  const idle = () => !["running", "queued"].includes(h.store.getTask(task.id).agentState);
+  const before = h.store.listTasks(projectId).length;
+
+  h.orchestrator.startResearch(task.id);
+  await waitFor("triage review", () => h.store.getTask(task.id).column === "triage_review" && idle());
+  // Nothing exists until you accept.
+  assert.equal(h.store.listTasks(projectId).length, before);
+  assert.match(String(h.calls().find((c) => "prompt" in c)!.prompt), /submit_proposals/);
+
+  const latest = h.store.latestProposals(task.id)!;
+  assert.equal(latest.version, 1);
+  assert.deepEqual(latest.decisions, {});
+
+  // A drop cannot be decided, and a stale version is refused.
+  await assert.rejects(async () => h.orchestrator.decideProposals(task.id, { version: 1, accept: [2], reject: [] }), /not a proposed task/);
+  await assert.rejects(async () => h.orchestrator.decideProposals(task.id, { version: 9, accept: [0], reject: [] }), /new proposals/);
+
+  const decided = h.orchestrator.decideProposals(task.id, { version: 1, accept: [0], reject: [1] });
+  assert.equal(decided.decisions[0]?.status, "accepted");
+  assert.equal(decided.decisions[1]?.status, "rejected");
+  const created = h.store.getTask(decided.decisions[0]!.taskId!);
+  assert.equal(created.title, "Fix the login redirect");
+  assert.equal(created.kind, "code");
+  assert.equal(created.column, "inbox");
+  assert.equal(created.agentState, "idle");
+  assert.equal(h.store.listTasks(projectId).length, before + 1);
+  await assert.rejects(async () => h.orchestrator.decideProposals(task.id, { version: 1, accept: [0], reject: [] }), /already decided/);
+
+  // Sending back resumes the agent. The new version starts with no decisions.
+  h.orchestrator.sendBackProposals(task.id, "Merge these.");
+  await waitFor("revised proposals", () => h.store.latestProposals(task.id)?.version === 2);
+  await waitFor("triage review again", () => h.store.getTask(task.id).column === "triage_review" && idle());
+  assert.deepEqual(h.store.latestProposals(task.id)!.decisions, {});
+
+  const done = await h.orchestrator.finishTriage(task.id);
+  assert.equal(done.column, "done");
+  assert.match(taskMarkdown(h.store, task.id), /## Proposals \(version 2\)/);
+  assert.match(h.store.listMessages(task.id).map((m) => m.text).join("\n"), /3 undecided|2 undecided/);
+  await assert.rejects(() => h.orchestrator.finishTriage(task.id), /Triage review/);
+});
+
+test("a triage in a workspace cannot propose code, and its accepted tasks default to reports", async () => {
+  const h = await harness([{ name: "triager", turns: [[{ tool: "submit_proposals", args: proposals("Code.") }]] }]);
+  const workspace = h.store.createProject({ ...ProjectInputSchema.parse({ name: "Desk", kind: "workspace" }), repoPath: h.repo });
+  const task = h.store.createTask({ projectId: workspace.id, title: "Triage", description: "x", kind: "triage", blockedBy: [] });
+
+  h.orchestrator.startResearch(task.id);
+  // The code proposal is refused, so nothing is saved and the task stays in Research.
+  await waitFor("agent finished", () => !["running", "queued"].includes(h.store.getTask(task.id).agentState));
+  assert.equal(h.store.getTask(task.id).column, "research");
+  assert.equal(h.store.latestProposals(task.id), null);
+
+  // An item without a kind becomes a report there.
+  h.store.addProposals(task.id, null, proposals("Reports.", [{ action: "create_task", title: "Look into X", reason: "Unknown." }]));
+  h.store.moveTask(task.id, { column: "triage_review", beforeTaskId: null });
+  const decided = h.orchestrator.decideProposals(task.id, { version: 1, accept: [0], reject: [] });
+  assert.equal(h.store.getTask(decided.decisions[0]!.taskId!).kind, "report");
+});
+
+test("a triage task refuses the plan and report actions", async () => {
+  const h = await harness([]);
+  const task = h.store.createTask({ projectId: h.task.projectId, title: "Triage", description: "", kind: "triage", blockedBy: [] });
+  await assert.rejects(() => h.orchestrator.approvePlan(task.id), /Plan review/);
+  await assert.rejects(() => h.orchestrator.approveReportDoc(task.id), /Report review/);
+  await assert.rejects(async () => h.orchestrator.sendBackReportDoc(task.id, "x"), /Only a report task/);
+  await assert.rejects(async () => h.orchestrator.decideProposals(task.id, { version: 1, accept: [], reject: [] }), /Triage review/);
+});
+
 test("a workspace project has no repository, takes only reports, and runs its agent in its own folder", async () => {
   const h = await harness([{ name: "reporter", turns: [[{ tool: "submit_report", args: reportDoc("No repo needed.") }]] }]);
   const call = (path: string, method: string, body?: unknown) =>

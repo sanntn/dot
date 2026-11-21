@@ -17,6 +17,8 @@ import type {
   SearchHit,
   ProjectPatch,
   RemoteInfo,
+  ProposalDecide,
+  ProposalsArtifact,
   ReportDocArtifact,
   ReviewArtifact,
   Run,
@@ -127,6 +129,11 @@ export const api = {
   getReportDoc: (id: number) => request<ReportDocArtifact | null>(`/tasks/${id}/doc`),
   approveReportDoc: (id: number) => request<Task>(`/tasks/${id}/doc/approve`, "POST"),
   sendBackReportDoc: (id: number, notes: string) => request<Task>(`/tasks/${id}/doc/send-back`, "POST", { notes }),
+  getProposals: (id: number) => request<ProposalsArtifact | null>(`/tasks/${id}/proposals`),
+  decideProposals: (id: number, decide: ProposalDecide) =>
+    request<ProposalsArtifact>(`/tasks/${id}/proposals/decide`, "POST", decide),
+  finishTriage: (id: number) => request<Task>(`/tasks/${id}/proposals/finish`, "POST"),
+  sendBackProposals: (id: number, notes: string) => request<Task>(`/tasks/${id}/proposals/send-back`, "POST", { notes }),
 
   // kind "task" images go to the researcher with the task's brief. Chat images (the default) go with a message.
   listTaskImages: (taskId: number) => request<AttachmentRef[]>(`/tasks/${taskId}/attachments`),

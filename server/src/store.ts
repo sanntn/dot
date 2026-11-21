@@ -8,6 +8,9 @@ import type {
   ChatRole,
   Column,
   ProjectKind,
+  ProposalDecision,
+  Proposals,
+  ProposalsArtifact,
   ReportDoc,
   ReportDocArtifact,
   TaskKind,
@@ -602,6 +605,35 @@ export class Store {
   latestReportDoc(taskId: number): ReportDocArtifact | null {
     const a = this.latestArtifact(taskId, "document");
     return a && { version: a.version, author: a.author, report: a.payload as ReportDoc, createdAt: a.createdAt };
+  }
+
+  // Triage output. The agent's items are one artifact per version. Your decisions for a version are
+  // saved apart from it, as a newer row each time, so the agent's own words never change.
+  addProposals(taskId: number, runId: number | null, proposals: Proposals): ProposalsArtifact {
+    this.addArtifact(taskId, runId, "proposals", "agent", proposals);
+    return this.latestProposals(taskId)!;
+  }
+
+  latestProposals(taskId: number): ProposalsArtifact | null {
+    const a = this.latestArtifact(taskId, "proposals");
+    if (!a) return null;
+    const row = this.db
+      .prepare("SELECT payload FROM artifacts WHERE task_id = ? AND type = 'proposal_decisions' ORDER BY version DESC LIMIT 1")
+      .get(taskId) as { payload: string } | undefined;
+    const saved = row ? (JSON.parse(row.payload) as { forVersion: number; decisions: Record<number, ProposalDecision> }) : null;
+    return {
+      version: a.version,
+      proposals: a.payload as Proposals,
+      decisions: saved && saved.forVersion === a.version ? saved.decisions : {},
+      createdAt: a.createdAt,
+    };
+  }
+
+  // Adds decisions for one version of the proposals to the ones already saved.
+  addProposalDecisions(taskId: number, forVersion: number, decided: Record<number, ProposalDecision>): void {
+    const current = this.latestProposals(taskId);
+    const merged = current && current.version === forVersion ? { ...current.decisions, ...decided } : decided;
+    this.addArtifact(taskId, null, "proposal_decisions", "user", { forVersion, decisions: merged });
   }
 
   addReview(taskId: number, runId: number, round: number, reportVersion: number, review: Review): ReviewArtifact {

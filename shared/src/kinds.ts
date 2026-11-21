@@ -1,8 +1,8 @@
 import type { AgentStage, Column } from "./index.ts";
 
 // What a task is for. A kind decides which columns the task passes through, which stages run, and
-// which columns wait for you. Code changes and reports exist so far. New kinds add an entry to KINDS.
-export const TASK_KINDS = ["code", "report"] as const;
+// which columns wait for you. New kinds add an entry to KINDS.
+export const TASK_KINDS = ["code", "report", "triage"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 export type KindDef = {
@@ -22,6 +22,8 @@ export type KindDef = {
   startable: readonly Column[];
   // Names for agent stages that differ from the defaults in STAGE_LABELS.
   stageLabels: Partial<Record<AgentStage, string>>;
+  // The MCP tool that ends the research stage by handing its output to you.
+  submitTool: string;
 };
 
 export const KINDS: Record<TaskKind, KindDef> = {
@@ -35,6 +37,7 @@ export const KINDS: Record<TaskKind, KindDef> = {
     stageColumns: { research: "research", execute: "execute", review: "review" },
     startable: ["inbox", "research", "execute", "review"],
     stageLabels: {},
+    submitTool: "submit_plan",
   },
   report: {
     label: "Report",
@@ -46,6 +49,19 @@ export const KINDS: Record<TaskKind, KindDef> = {
     stageColumns: { research: "research" },
     startable: ["inbox", "research"],
     stageLabels: { research: "Report agent" },
+    submitTool: "submit_report",
+  },
+  triage: {
+    label: "Triage",
+    blurb: "Read pasted notes, a list or files and propose tasks. Nothing is created until you accept it.",
+    columns: ["inbox", "research", "triage_review", "done"],
+    gates: ["triage_review"],
+    steps: ["Triage", "Review"],
+    stepOf: { research: 0, triage_review: 1 },
+    stageColumns: { research: "research" },
+    startable: ["inbox", "research"],
+    stageLabels: { research: "Triage agent" },
+    submitTool: "submit_proposals",
   },
 };
 

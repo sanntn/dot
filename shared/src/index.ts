@@ -9,6 +9,7 @@ export const COLUMNS = [
   "research",
   "plan_review",
   "report_review",
+  "triage_review",
   "execute",
   "review",
   "merge_approval",
@@ -24,6 +25,7 @@ export const COLUMN_LABELS: Record<Column, string> = {
   research: "Research",
   plan_review: "Plan review",
   report_review: "Report review",
+  triage_review: "Triage review",
   execute: "Execute",
   review: "Review",
   merge_approval: "Merge approval",
@@ -410,6 +412,52 @@ export type ReportDocArtifact = {
   createdAt: string;
 };
 
+// The output of a triage task: items found in the input, each a task to create or something to drop.
+// Dot creates nothing until you accept an item.
+export const PROPOSAL_ACTIONS = ["create_task", "drop"] as const;
+export const MAX_PROPOSALS = 50;
+
+export const ProposalItemSchema = z.object({
+  action: z.enum(PROPOSAL_ACTIONS).describe("create_task proposes a task. drop lists something in the input that needs no task."),
+  title: z.string().trim().min(1).max(200).describe("The task title, or what the dropped item was."),
+  description: z
+    .string()
+    .trim()
+    .max(20000)
+    .optional()
+    .describe("For create_task: what to do and why, enough for the agent that picks it up. Leave out for drop."),
+  taskKind: z
+    .enum(TASK_KINDS)
+    .optional()
+    .describe("For create_task: code for a change to the repository, report for a question to research. Defaults to report in a workspace and code otherwise."),
+  reason: z.string().trim().min(1).describe("Why this item is a task, or why it is dropped. One sentence."),
+});
+export type ProposalItem = z.infer<typeof ProposalItemSchema>;
+
+export const ProposalsSchema = z.object({
+  headline: z.string().trim().min(1).max(200).describe("What the input held and what you propose, in one sentence."),
+  summary: z.string().trim().min(1).describe("Two or three sentences: how you read the input and what you decided."),
+  items: z.array(ProposalItemSchema).min(1).max(MAX_PROPOSALS).describe("Every actionable thing you found, in the order you would do them."),
+});
+export type Proposals = z.infer<typeof ProposalsSchema>;
+
+// What you decided for the items of one proposals version. An index has no entry until you decide it.
+export type ProposalDecision = { status: "accepted" | "rejected"; taskId: number | null };
+
+export type ProposalsArtifact = {
+  version: number;
+  proposals: Proposals;
+  decisions: Record<number, ProposalDecision>;
+  createdAt: string;
+};
+
+export const ProposalDecideSchema = z.object({
+  version: z.number().int().min(1),
+  accept: z.array(z.number().int().min(0)).default([]),
+  reject: z.array(z.number().int().min(0)).default([]),
+});
+export type ProposalDecide = z.infer<typeof ProposalDecideSchema>;
+
 // The executor's output. Dot adds the commits itself from git, so the agent can't misreport them.
 export const ExecutionReportSchema = z.object({
   headline: z
@@ -572,13 +620,14 @@ export type Run = {
 export type AttachmentRef = { id: number; fileName: string; mediaType: string };
 
 export type ChatRole = "user" | "agent" | "tool" | "system";
-export type ChatKind = "text" | "tool" | "question" | "plan" | "document" | "report" | "review" | "error" | "status";
+export type ChatKind = "text" | "tool" | "question" | "plan" | "document" | "proposals" | "report" | "review" | "error" | "status";
 
 export type ChatData = {
   tool?: string;
   choices?: string[];
   answered?: boolean;
   planVersion?: number;
+  proposalsVersion?: number;
   reportVersion?: number;
   reviewVersion?: number;
   attachments?: AttachmentRef[];

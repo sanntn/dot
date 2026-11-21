@@ -16,6 +16,7 @@ import {
   MAX_IMAGE_BYTES,
   MergeSchema,
   PlanSplitSchema,
+  ProposalDecideSchema,
   PlanUpdateSchema,
   REPO_HOST_LABELS,
   ProjectInputSchema,
@@ -606,6 +607,18 @@ export function createApp(
   app.post("/tasks/:id/doc/send-back", async (c) => {
     const { notes } = await parseBody(c, SendBackSchema);
     return c.json(orchestrator.sendBackReportDoc(idParam(c), notes));
+  });
+
+  // A triage task's proposed tasks. Accept or reject items, then finish.
+  app.get("/tasks/:id/proposals", (c) => c.json(store.latestProposals(idParam(c))));
+  app.post("/tasks/:id/proposals/decide", async (c) => {
+    const input = await parseBody(c, ProposalDecideSchema);
+    return c.json(orchestrator.decideProposals(idParam(c), input));
+  });
+  app.post("/tasks/:id/proposals/finish", async (c) => c.json(await orchestrator.finishTriage(idParam(c))));
+  app.post("/tasks/:id/proposals/send-back", async (c) => {
+    const { notes } = await parseBody(c, SendBackSchema);
+    return c.json(orchestrator.sendBackProposals(idParam(c), notes));
   });
 
   app.post("/tasks/:id/plan/send-back", async (c) => {

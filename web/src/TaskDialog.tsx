@@ -326,7 +326,9 @@ export function TaskFields(props: { id: string; title?: string; description?: st
           placeholder={
             props.kind === "report"
               ? "The question to answer, what you will use the answer for, and anything to skip."
-              : "What should be done, and why. The research agent starts from this."
+              : props.kind === "triage"
+                ? "Paste the notes, list or messages to sort. The agent proposes tasks, and you accept the ones you want."
+                : "What should be done, and why. The research agent starts from this."
           }
           className="max-h-80"
         />

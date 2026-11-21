@@ -14,6 +14,9 @@ import {
   type Plan,
   type PlanArtifact,
   type PlanSplit,
+  type ProposalDecide,
+  type ProposalDecision,
+  type ProposalsArtifact,
   type Project,
   type Run,
   type Task,
@@ -33,6 +36,13 @@ import {
   REPORTER_TOOLS,
   reporterBrief,
 } from "./agents/reporter.ts";
+import {
+  TRIAGER_ALLOWED_TOOLS,
+  TRIAGER_DENIED_TOOLS,
+  TRIAGER_SYSTEM_PROMPT,
+  TRIAGER_TOOLS,
+  triagerBrief,
+} from "./agents/triager.ts";
 import {
   EXECUTOR_ALLOWED_TOOLS,
   EXECUTOR_DENIED_TOOLS,
@@ -142,14 +152,28 @@ const REPORT_CONFIG: StageConfig = {
   stalled: "The report agent stopped without a report or a question. Reply here to tell it how to continue.",
 };
 
+// The triage kind also has one agent, which proposes tasks instead of writing a plan.
+const TRIAGE_CONFIG: StageConfig = {
+  tools: TRIAGER_TOOLS,
+  allowedTools: TRIAGER_ALLOWED_TOOLS,
+  deniedTools: TRIAGER_DENIED_TOOLS,
+  systemPrompt: TRIAGER_SYSTEM_PROMPT,
+  nudge: researchNudge("submit_proposals"),
+  stalled: "The triage agent stopped without proposals or a question. Reply here to tell it how to continue.",
+};
+
 // The stage's settings for a kind of task.
 function stageConfig(kind: TaskKind, stage: AgentStage): StageConfig {
-  return kind === "report" && stage === "research" ? REPORT_CONFIG : STAGE_CONFIG[stage];
+  if (stage === "research" && kind === "report") return REPORT_CONFIG;
+  if (stage === "research" && kind === "triage") return TRIAGE_CONFIG;
+  return STAGE_CONFIG[stage];
 }
 
 // What a research-stage agent reads first, by kind.
 function researchBrief(task: Task, project: Project, rules: string[]): string {
-  return task.kind === "report" ? reporterBrief(task, project) : researcherBrief(task, project, rules);
+  if (task.kind === "report") return reporterBrief(task, project);
+  if (task.kind === "triage") return triagerBrief(task, project);
+  return researcherBrief(task, project, rules);
 }
 
 // In-memory state for a run while Dot is up. The database holds everything that must survive a restart.
@@ -290,7 +314,7 @@ export class Orchestrator {
     this.store.setNeedsInput(taskId, false);
     this.store.addMessage({ taskId, runId: run.id, role: "system", kind: "status", text: `${stageLabel(task.kind, "research")} resumed.` });
     const content: ContentBlock[] = run.sessionStarted
-      ? [{ type: "text", text: `Continue the research. When you are ready, call ${task.kind === "report" ? "submit_report" : "submit_plan"}. If you need a decision from the user, call ask_human.` }]
+      ? [{ type: "text", text: `Continue the research. When you are ready, call ${kindDef(task.kind).submitTool}. If you need a decision from the user, call ask_human.` }]
       : buildContent(researchBrief(task, this.store.getProject(task.projectId), this.store.activeRules(task.projectId)), this.store.taskAttachments(taskId));
     this.dispatch(run.id, content, true);
     this.publish(taskId);
@@ -622,6 +646,99 @@ ${checksSummary(results)}` });
     const task = this.store.getTask(taskId);
     if (task.kind !== "report") throw new HttpError(409, "Only a report task has a report to send back");
     return this.reviseResearch(taskId, { gate: "report_review", what: "report", submit: "submit_report", notes });
+  }
+
+  // A triage task: you accept or reject each proposed task. Accepting creates the task in the Inbox of
+  // this project, and nothing starts by itself.
+  decideProposals(taskId: number, input: ProposalDecide): ProposalsArtifact {
+    const task = this.store.getTask(taskId);
+    if (task.kind !== "triage" || task.column !== "triage_review") {
+      throw new HttpError(409, "Proposals can be decided while they wait in Triage review");
+    }
+    const latest = this.store.latestProposals(taskId);
+    if (!latest) throw new HttpError(409, "This task has no proposals yet");
+    // The agent may have submitted a newer version while you were reading this one.
+    if (latest.version !== input.version) throw new HttpError(409, "The agent submitted new proposals. Reload and decide again.");
+
+    const items = latest.proposals.items;
+    const indexes = [...input.accept, ...input.reject];
+    if (new Set(indexes).size !== indexes.length) throw new HttpError(400, "An item can only be decided once per request");
+    for (const i of indexes) {
+      if (items[i]?.action !== "create_task") throw new HttpError(400, `Item ${i + 1} is not a proposed task`);
+      if (latest.decisions[i]) throw new HttpError(409, `Item ${i + 1} is already decided`);
+    }
+
+    const project = this.store.getProject(task.projectId);
+    const defaultKind: TaskKind = project.kind === "workspace" ? "report" : "code";
+    const decided: Record<number, ProposalDecision> = {};
+    const created: [number, number][] = [];
+    let failure: unknown = null;
+    for (const i of input.accept) {
+      const item = items[i]!;
+      try {
+        const made = this.store.createTask({
+          projectId: task.projectId,
+          title: item.title,
+          description: item.description ?? item.reason,
+          kind: item.taskKind ?? defaultKind,
+          blockedBy: [],
+          autoStart: false,
+        });
+        created.push([i, made.id]);
+        decided[i] = { status: "accepted", taskId: made.id };
+      } catch (err) {
+        // Keep the tasks already made on record, or accepting again would duplicate them.
+        failure = err;
+        break;
+      }
+    }
+    if (!failure) for (const i of input.reject) decided[i] = { status: "rejected", taskId: null };
+
+    if (Object.keys(decided).length > 0) this.store.addProposalDecisions(taskId, latest.version, decided);
+    if (failure) {
+      for (const [, id] of created) this.publish(id);
+      this.publish(taskId);
+      throw failure;
+    }
+    const parts = [
+      created.length > 0 ? `${created.length} ${created.length === 1 ? "task" : "tasks"} created in the Inbox` : "",
+      input.reject.length > 0 ? `${input.reject.length} rejected` : "",
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: `Triage: ${parts.join(", ")}.` });
+    }
+    for (const [, id] of created) this.publish(id);
+    this.publish(taskId);
+    return this.store.latestProposals(taskId)!;
+  }
+
+  // Finishes a triage task. Proposed tasks you left undecided are dropped.
+  async finishTriage(taskId: number): Promise<Task> {
+    const task = this.store.getTask(taskId);
+    if (task.kind !== "triage" || task.column !== "triage_review") {
+      throw new HttpError(409, "Only a triage task in Triage review can be finished");
+    }
+    const latest = this.store.latestProposals(taskId);
+    if (!latest) throw new HttpError(409, "This task has no proposals yet");
+    await this.stop(taskId);
+    const open = latest.proposals.items.filter((item, i) => item.action === "create_task" && !latest.decisions[i]).length;
+    this.store.moveTask(taskId, { column: "done", beforeTaskId: null });
+    this.store.setNeedsInput(taskId, false);
+    this.store.addMessage({
+      taskId,
+      runId: null,
+      role: "system",
+      kind: "status",
+      text: open > 0 ? `Triage finished. ${open} undecided ${open === 1 ? "proposal was" : "proposals were"} dropped.` : "Triage finished.",
+    });
+    this.publish(taskId);
+    return this.store.getTask(taskId);
+  }
+
+  sendBackProposals(taskId: number, notes: string): Task {
+    const task = this.store.getTask(taskId);
+    if (task.kind !== "triage") throw new HttpError(409, "Only a triage task has proposals to send back");
+    return this.reviseResearch(taskId, { gate: "triage_review", what: "proposals", submit: "submit_proposals", notes });
   }
 
   // Sends a plan or report back to the research-stage agent with your notes. The agent resumes its session.
