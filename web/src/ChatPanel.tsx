@@ -359,6 +359,20 @@ function MessageView(props: {
   }
 
   if (m.kind === "status") {
+    // A preview posts its screenshot as an attachment on the status line.
+    const pictures = m.data?.attachments ?? [];
+    if (pictures.length > 0) {
+      return (
+        <div className="grid gap-2">
+          {pictures.map((a) => (
+            <a key={a.id} href={attachmentUrl(a.id)} target="_blank" rel="noreferrer" className="block">
+              <img src={attachmentUrl(a.id)} alt={a.fileName} className="w-full rounded-lg border object-contain" />
+            </a>
+          ))}
+          <p className="text-center text-xs text-muted-foreground">{m.text}</p>
+        </div>
+      );
+    }
     return <p className="text-center text-xs text-muted-foreground">{m.text}</p>;
   }
 

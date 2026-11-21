@@ -41,7 +41,9 @@ import {
   TemplateInputSchema,
   TaskMoveSchema,
   TaskPatchSchema,
+  previewPathProblem,
 } from "@dot/shared";
+import { contentTypeOf, resolveInside } from "./preview.ts";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -87,6 +89,10 @@ function requestGuard(c: Context, extraHosts: Set<string>): string | null {
       ? `Requests must be addressed to localhost or a host in DOT_ALLOWED_HOSTS, not ${host}`
       : `Requests must be addressed to localhost. To serve Dot on ${host}, add it to DOT_ALLOWED_HOSTS.`;
   }
+
+  // A preview page runs sandboxed, so its requests look cross-site and carry an Origin of "null". Its files are
+  // read-only and the link's token is what authorizes them.
+  if (c.req.path.startsWith("/api/site/") && (c.req.method === "GET" || c.req.method === "HEAD")) return null;
 
   const site = c.req.header("sec-fetch-site");
   if (site && site !== "same-origin" && site !== "none") return "Cross-site requests are not allowed";
@@ -779,6 +785,40 @@ export function createApp(
 
   // Takes a picture of the task's running dev server. It finishes in the background and posts in the chat.
   app.post("/tasks/:id/preview", (c) => c.json(orchestrator.startPreview(idParam(c)), 202));
+
+  // A link that opens the task's preview page in a browser tab, to click through it yourself. Dot serves
+  // the worktree's files for a few hours, with a sandbox that keeps the page's scripts away from Dot's API.
+  app.post("/tasks/:id/site-link", (c) => {
+    const task = store.getTask(idParam(c));
+    const project = store.getProject(task.projectId);
+    const page = project.previewPath;
+    if (!page || previewPathProblem(page) || project.devCommand) {
+      throw new HttpError(409, "Set a preview page in the project settings, and leave the dev command empty.");
+    }
+    if (!task.worktreePath || !existsSync(task.worktreePath)) throw new HttpError(409, "The worktree was removed, so there is nothing to open");
+    const path = page.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
+    return c.json({ url: `/api/site/${options.auth.siteToken(task.id)}/${path}` });
+  });
+
+  app.get("/site/:token/*", (c) => {
+    const token = c.req.param("token");
+    const taskId = options.auth.siteTaskId(token);
+    if (taskId === null) throw notFound("Page");
+    const task = store.getTask(taskId);
+    if (!task.worktreePath) throw notFound("Page");
+    const rest = new URL(c.req.url).pathname.slice(`/api/site/${token}`.length) || "/";
+    const file = resolveInside(task.worktreePath, rest);
+    if (!file) throw notFound("Page");
+    return c.body(readFileSync(file), 200, {
+      "Content-Type": contentTypeOf(file),
+      // No same-origin rights: the page cannot call Dot's API, read its cookies or open its storage.
+      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+  });
   app.post("/tasks/:id/plan/split-all", (c) => c.json(orchestrator.splitIntoSubtasks(idParam(c)), 201));
   app.post("/tasks/:id/plan/split", async (c) => {
     const input = await parseBody(c, PlanSplitSchema);

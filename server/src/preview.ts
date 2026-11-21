@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createReadStream, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { delimiter, extname, join, resolve, sep } from "node:path";
+import { delimiter, extname, join, relative, resolve, sep } from "node:path";
 import { previewPathProblem, type Project } from "@dot/shared";
 import { killTree, plainEnv } from "./checks.ts";
 import { asAgent, handOver, isolated } from "./isolation.ts";
@@ -130,28 +130,40 @@ const TYPES: Record<string, string> = {
   ".webm": "video/webm",
 };
 
-// Serves a folder over HTTP on a free loopback port. Anything that resolves outside the folder, symlinks
-// included, gets a 404.
+export const contentTypeOf = (file: string) => TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
+
+// The file a URL path names inside a folder, or null. Directories answer with their index.html. Anything that
+// resolves outside the folder, symlinks included, is refused, and so are git's own files and .env files.
+export function resolveInside(root: string, urlPath: string): string | null {
+  try {
+    const base = realpathSync(root);
+    const path = decodeURIComponent(urlPath);
+    let file = resolve(base, `.${path.startsWith("/") ? path : `/${path}`}`);
+    if (statSync(file).isDirectory()) file = join(file, "index.html");
+    file = realpathSync(file);
+    if (file !== base && !file.startsWith(base + sep)) return null;
+    if (!statSync(file).isFile()) return null;
+    const parts = relative(base, file).split(sep);
+    if (parts.includes(".git") || parts.some((p) => p.startsWith(".env"))) return null;
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+// Serves a folder over HTTP on a free loopback port.
 export function serveFolder(root: string): Promise<{ url: URL; close: () => void }> {
-  const base = realpathSync(root);
   const server = createServer((req, res) => {
     const deny = () => {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("Not found");
     };
     if (req.method !== "GET" && req.method !== "HEAD") return deny();
-    try {
-      const path = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
-      let file = resolve(base, `.${path}`);
-      if (statSync(file).isDirectory()) file = join(file, "index.html");
-      file = realpathSync(file);
-      if (file !== base && !file.startsWith(base + sep)) return deny();
-      res.writeHead(200, { "content-type": TYPES[extname(file).toLowerCase()] ?? "application/octet-stream", "cache-control": "no-store" });
-      if (req.method === "HEAD") res.end();
-      else createReadStream(file).on("error", () => res.destroy()).pipe(res);
-    } catch {
-      deny();
-    }
+    const file = resolveInside(root, new URL(req.url ?? "/", "http://localhost").pathname);
+    if (!file) return deny();
+    res.writeHead(200, { "content-type": contentTypeOf(file), "cache-control": "no-store" });
+    if (req.method === "HEAD") res.end();
+    else createReadStream(file).on("error", () => res.destroy()).pipe(res);
   });
   return new Promise((resolveServer, reject) => {
     server.once("error", reject);

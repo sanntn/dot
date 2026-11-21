@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_MEMORY_NOTES, MAX_PENDING_MEMORY, planSubtaskProblem, type Plan } from "@dot/shared";
 import { openDb } from "../src/db.ts";
+import { createApp } from "../src/app.ts";
+import { Auth } from "../src/auth.ts";
+import { EventBus } from "../src/events.ts";
 import { excludeFromGit } from "../src/git.ts";
 import { findBrowser, previewMode, previewUrl, serveFolder } from "../src/preview.ts";
 import { Store } from "../src/store.ts";
@@ -144,4 +147,49 @@ test("the preview page stays out of git status in a worktree", async () => {
   await excludeFromGit(tree, ".dot-preview/index.html");
   assert.equal(run(tree, "status", "--porcelain").trim(), "");
   assert.equal(readFileSync(join(repo, ".git", "info", "exclude"), "utf8").split("/.dot-preview/index.html").length, 2);
+});
+
+test("a preview link opens the page in a sandbox and refuses anything outside the worktree", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dot-site-link-"));
+  const tree = join(dir, "tree");
+  mkdirSync(join(tree, ".dot-preview"), { recursive: true });
+  mkdirSync(join(tree, "assets"));
+  mkdirSync(join(tree, ".git"));
+  writeFileSync(join(tree, ".dot-preview", "index.html"), "<p>page</p>");
+  writeFileSync(join(tree, "assets", "main.css"), "body{}");
+  writeFileSync(join(tree, ".git", "HEAD"), "ref");
+  writeFileSync(join(tree, ".env"), "SECRET=1");
+  writeFileSync(join(dir, "outside.txt"), "outside");
+
+  const store = new Store(openDb(":memory:"));
+  const project = store.createProject({ name: "P", repoPath: "/tmp/p", baseBranch: "main", browserTesting: false } as never);
+  const task = store.createTask({ projectId: project.id, title: "T", description: "" } as never);
+  store.setTaskWorkspace(task.id, "task", tree);
+  const auth = new Auth("pw", "secret", null);
+  const app = createApp(store, new EventBus(), {} as never, { attachmentsDir: "/tmp/a", reposDir: "/tmp/r", auth });
+  const headers = { host: "127.0.0.1" };
+
+  // Signed out, the link cannot be made. Without a preview page it cannot be made either.
+  assert.equal((await app.request(`/api/tasks/${task.id}/site-link`, { method: "POST", headers })).status, 401);
+  const token = auth.siteToken(task.id);
+  const page = await app.request(`/api/site/${token}/.dot-preview/index.html`, { headers });
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), "<p>page</p>");
+  assert.match(page.headers.get("content-security-policy") ?? "", /^sandbox allow-scripts/);
+  assert.doesNotMatch(page.headers.get("content-security-policy") ?? "", /allow-same-origin/);
+
+  // The sandboxed page's own requests look cross-site and carry Origin: null. They still load.
+  const sub = await app.request(`/api/site/${token}/assets/main.css`, { headers: { ...headers, "sec-fetch-site": "cross-site", origin: "null" } });
+  assert.equal(sub.status, 200);
+  assert.match(sub.headers.get("content-type") ?? "", /text\/css/);
+
+  for (const path of ["/%2e%2e/outside.txt", "/.git/HEAD", "/.env", "/missing.html"]) {
+    assert.equal((await app.request(`/api/site/${token}${path}`, { headers })).status, 404, path);
+  }
+  // Forged, tampered and other-task tokens are refused, and the rest of the API still needs a sign-in.
+  assert.equal((await app.request(`/api/site/${token}x/.dot-preview/index.html`, { headers })).status, 404);
+  assert.equal((await app.request(`/api/site/${task.id}.1.99999999999999.abc/.dot-preview/index.html`, { headers })).status, 404);
+  assert.equal((await app.request(`/api/tasks/${task.id}`, { headers })).status, 401);
+  assert.equal(auth.siteTaskId(token), task.id);
+  assert.equal(auth.siteTaskId(token.replace(`${task.id}.`, `${task.id + 1}.`)), null);
 });

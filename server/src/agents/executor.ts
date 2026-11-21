@@ -99,6 +99,8 @@ export function previewNote(project: Project): string[] {
     `Preview page: ${project.previewPath}`,
     `If your change affects how something looks, write a plain static page at ${project.previewPath} that shows it, so a screenshot can be taken for review.`,
     `Link the built CSS and JavaScript${project.previewBuild ? ` (the build command ${project.previewBuild} runs first)` : ""} and write the markup of the changed parts by hand with realistic sample content.`,
+    "Use relative links for every asset, such as ../theme/assets/css/main.css, never a path that starts with a slash. The page is also opened from a sub-path, and the user can click through it.",
+    "Keep it self-contained: no network calls, and no cookies or localStorage, which the preview does not allow.",
     "Dot keeps this page out of git, so it will not show as an uncommitted change. Do not force-add it.",
   ];
 }

@@ -14,6 +14,7 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 
 const COOKIE = "dot_session";
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+const SITE_LINK_MS = 4 * 60 * 60 * 1000;
 const MAX_FAILURES = 5;
 const LOCKOUT_MS = 60_000;
 const MAX_TRACKED_CLIENTS = 1000;
@@ -148,11 +149,30 @@ export class Auth {
     deleteCookie(c, COOKIE, { path: "/" });
   }
 
+  // A link to one task's preview page, good for a few hours. The page runs in a sandbox with no cookies,
+  // so its own stylesheets, scripts and fonts cannot carry the session. The token in the path stands in for it.
+  siteToken(taskId: number): string {
+    const issued = Date.now();
+    const payload = `${taskId}.${issued}.${issued + SITE_LINK_MS}`;
+    return `${payload}.${this.sign(`site:${payload}`)}`;
+  }
+
+  // The task a site token is for, or null when it is forged, expired or older than the last sign-out.
+  siteTaskId(token: string): number | null {
+    const [task, issued, expires, signature, ...extra] = token.split(".");
+    if (!task || !issued || !expires || !signature || extra.length > 0) return null;
+    if (![task, issued, expires].every((n) => /^\d+$/.test(n))) return null;
+    if (Number(expires) < Date.now() || Number(issued) <= this.state.revokedBefore) return null;
+    return sameText(signature, this.sign(`site:${task}.${issued}.${expires}`)) ? Number(task) : null;
+  }
+
   // Blocks the API for anyone who is not signed in. Agents reach /api/mcp with a per-run token
-  // instead, and the health check and login routes must work signed out.
+  // instead, preview pages reach /api/site with a per-task token, and the health check and login
+  // routes must work signed out.
   middleware = async (c: Context, next: Next) => {
     const path = c.req.path;
-    const open = path === "/api/health" || path === "/api/login" || path === "/api/session" || path.startsWith("/api/mcp/");
+    const open =
+      path === "/api/health" || path === "/api/login" || path === "/api/session" || path.startsWith("/api/mcp/") || path.startsWith("/api/site/");
     if (open || this.isSignedIn(c)) return next();
     return c.json({ error: "Sign in required" }, 401);
   };

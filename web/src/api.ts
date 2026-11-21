@@ -173,6 +173,7 @@ export const api = {
     request<{ task: Task; plan: PlanArtifact }>(`/tasks/${id}/plan/split`, "POST", { title, steps }),
   splitPlanIntoSubtasks: (id: number) => request<Task[]>(`/tasks/${id}/plan/split-all`, "POST"),
   startPreview: (id: number) => request<Task>(`/tasks/${id}/preview`, "POST"),
+  siteLink: (id: number) => request<{ url: string }>(`/tasks/${id}/site-link`, "POST"),
   approvePlan: (id: number) => request<Task>(`/tasks/${id}/plan/approve`, "POST"),
   sendBack: (id: number, notes: string) => request<Task>(`/tasks/${id}/plan/send-back`, "POST", { notes }),
   getReportDoc: (id: number) => request<ReportDocArtifact | null>(`/tasks/${id}/doc`),

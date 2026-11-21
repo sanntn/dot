@@ -7,13 +7,14 @@ import {
   type ChatMessage,
   type Column,
   type PlanArtifact,
+  type Project,
   type ProposalsArtifact,
   type ReportDocArtifact,
   type ReviewArtifact,
   type Run,
   type Task,
 } from "@dot/shared";
-import { Camera, Download, FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
+import { Camera, Download, ExternalLink, FileText, GitMerge, GitPullRequest, Play, RotateCcw, Square } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -63,7 +64,7 @@ function initialTab(task: Task): Tab {
 }
 
 // The task panel. Mounted to open; onClose runs after the close animation.
-export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[]; onClose: () => void }) {
+export function TaskSheet({ task, tasks, project, onClose }: { task: Task; tasks: Task[]; project: Project | null; onClose: () => void }) {
   const [open, setOpen] = useState(true);
   const [tab, setTab] = useState<Tab>(() => initialTab(task));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -296,6 +297,33 @@ export function TaskSheet({ task, tasks, onClose }: { task: Task; tasks: Task[];
               >
                 <Camera aria-hidden="true" />
                 {previewing ? "Previewing" : "Preview"}
+              </Button>
+            )}
+            {task.column === "merge_approval" && !working && isCode && project?.previewPath && !project.devCommand && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                loading={pending === "site"}
+                onClick={() =>
+                  void act("site", async () => {
+                    // The tab opens first, inside the click, so a pop-up blocker lets it through.
+                    const tab = window.open("about:blank", "_blank");
+                    try {
+                      const { url } = await api.siteLink(task.id);
+                      if (tab) {
+                        tab.opener = null;
+                        tab.location.href = url;
+                      } else window.location.assign(url);
+                    } catch (err) {
+                      tab?.close();
+                      throw err;
+                    }
+                  })
+                }
+              >
+                <ExternalLink aria-hidden="true" />
+                Open page
               </Button>
             )}
             {task.column === "merge" && !working && (
