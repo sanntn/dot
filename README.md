@@ -36,6 +36,11 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 | `DOT_DB` | `data/dot.db` | Database file |
 | `DOT_<NAME>_FILE` | none | Reads a secret from a file instead of `.env`. Works for `DOT_PASSWORD`, `DOT_SESSION_SECRET`, `DOT_BITBUCKET_TOKEN`, `DOT_GITHUB_TOKEN`, `DOT_CLAUDE_TOKEN` and `DOT_CLAUDE_TOKEN_<NAME>`. For example `DOT_GITHUB_TOKEN_FILE=/home/me/.dot/github-token`. A value set directly wins. Docker and Coolify secret mounts (`/run/secrets/...`) work the same way, but in the image the file must be readable by root only (mode `0400`). Docker mounts secrets world-readable by default, and Dot refuses to start while the agent user can read one. |
 | `DOT_AGENT_SANDBOX` | off | Set to `on` to run every agent command inside Claude Code's own sandbox, with Dot's private files unreadable. See Agent isolation. |
+| `DOT_FAVRO_EMAIL` | none | The email of the Favro account whose API token Dot uses to import cards. |
+| `DOT_FAVRO_TOKEN` | none | A Favro API token (My profile, API Tokens). A read-only token is enough. Also works as `DOT_FAVRO_TOKEN_FILE`. |
+| `DOT_FAVRO_ORG` | auto | The Favro organization ID. Needed only when the account belongs to several organizations that allow MCP. |
+| `DOT_FAVRO_URL` | `https://favro.com/mcp` | Favro's MCP endpoint. |
+| `DOT_BROWSER_BIN` | auto | Path to Chrome, Chromium or Edge, for previews. Dot looks in the usual places when this is blank. |
 | `DOT_BACKUP_KEEP` | `7` | How many daily database backups to keep in `data/backups`. `0` turns backups off. |
 | `DOT_NOTIFY_URL` | none | A webhook that gets a message when a task starts waiting for you: a question, a failure, a plan to review or a change to merge. Works with ntfy, Slack and Discord incoming webhooks, or any endpoint that takes a JSON POST. |
 | `DOT_NOTIFY_FORMAT` | `json` | `json` sends `text`, `content` and the task's fields. Use `text` for ntfy, which takes a plain body and a title header. |
@@ -46,6 +51,26 @@ Settings go in a `.env` file at the repo root, and all of them are optional:
 | `DOT_GITHUB_API` | `https://api.github.com` | GitHub API base URL. Change it only for GitHub Enterprise Server. |
 | `DOT_MERGE_POLL_MS` | `15000` | How often the merge step checks the build |
 | `DOT_MERGE_NO_CI_MS` | `300000` | How long it waits for any build status before asking you. In a repository without Pipelines or GitHub Actions it waits at most 30 seconds, then merges. |
+
+## Project memory
+
+Agents can suggest a short fact about the project with the `remember` tool: the real test command, where something lives, a trap they hit. The next researcher, executor and reviewer read these notes at the start of their brief, so they stop rediscovering the same things. A project keeps up to 40 notes of 300 characters. A suggestion shows in the task's chat and waits in Preferences. No agent sees it until you accept it, because an agent that read a hostile web page or issue could otherwise plant instructions for every later task. Accepted notes are framed as hints to check against the code. You can edit or delete any note and add your own.
+
+## Splitting a plan
+
+When the work is really several separate changes, the researcher fills in `subtasks` in its plan: a title, the steps it owns and which earlier subtasks it waits for. Plan review then shows a Split into N tasks button. Pressing it makes one task per part and closes the original. Parts with nothing to wait for start their research by themselves and run side by side, up to `DOT_MAX_AGENTS`. The others start once what they wait for is done. The older Split button still moves a few steps into one task that runs after this one.
+
+## Importing GitHub issues
+
+Import GitHub issues in the menu (or the command palette) lists the open issues of a GitHub project, with an optional label filter. Each picked issue becomes a task in the Inbox, or starts research at once. Dot reads the issue again from GitHub, so the text comes from GitHub and not from the browser. An issue with a task already is marked and not imported twice. The pull request for an imported task says `Closes #n`, so GitHub closes the issue on merge. The token needs Issues read access, on top of what merging needs. Dot reads each picked issue by number and tells you which ones it did not import. The pull request quotes only the issue's address and a `Closes #n` line, not the issue text. Bitbucket projects are not supported yet.
+
+## Importing Favro cards
+
+Set the Favro board in a project's settings (a link copied from Favro, or a board ID), and put `DOT_FAVRO_EMAIL` and `DOT_FAVRO_TOKEN` in `.env`. Import issues and cards in the menu then has a Favro cards tab. It lists the board's open cards, optionally for one column by name, and each pick becomes a task in the Inbox. Dot talks to Favro's MCP server (`get_board`, `get_cards`, `get_card`) with that token and reads each card by its number when importing, so the description comes from Favro and not from the browser. Cards already imported are marked. A workspace project can import cards too, and gets report tasks. Import only reads: nothing changes in Favro. Card links are not shown yet, because Favro's answers carry no card address.
+
+## Previews
+
+A project with a dev command and a dev URL (set in the project settings, and the URL must be on this machine) shows a Preview button in Merge approval. Dot starts the dev command in the task's worktree, waits for the URL to answer, opens it in headless Chrome, Chromium or Edge, takes a 1280 pixel wide picture and posts it in the task's chat. Then it stops the dev server. It refuses to run when something already answers at the URL, because the picture would show that and not the branch. The dev server and the browser get the same treatment as agents: no Dot or Claude credentials in their environment, and the agent user when isolation is on. The Docker image has no browser, so previews there need one installed and `DOT_BROWSER_BIN` set.
 
 ## Merging
 
