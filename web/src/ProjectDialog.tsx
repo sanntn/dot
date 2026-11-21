@@ -25,6 +25,8 @@ const TEXT_FIELDS = [
   { name: "typecheckCommand", label: "Typecheck command", placeholder: "npm run typecheck" },
   { name: "devCommand", label: "Dev server command", placeholder: "npm run dev" },
   { name: "devUrl", label: "Dev server URL", placeholder: "http://localhost:3000" },
+  { name: "previewPath", label: "Preview page (no dev server)", placeholder: ".dot-preview/index.html" },
+  { name: "previewBuild", label: "Build before preview", placeholder: "npm run build" },
 ] as const;
 
 // Mounted to open. onClose runs after the close animation, when the parent can unmount it.

@@ -79,7 +79,7 @@ import {
 } from "./git.ts";
 import { agentTools } from "./agentTools.ts";
 import { MergeStep } from "./merge.ts";
-import { capturePreview, previewUrl } from "./preview.ts";
+import { capturePreview, PREVIEW_SETUP_HINT, previewMode } from "./preview.ts";
 import { handleMcp, type McpTool } from "./mcp.ts";
 import type { Attachment, Store } from "./store.ts";
 
@@ -839,9 +839,7 @@ ${checksSummary(results)}` });
     if (!task.worktreePath || !existsSync(task.worktreePath)) throw new HttpError(409, "The worktree was removed, so there is nothing to preview");
     if (this.previewAborts.has(taskId)) throw new HttpError(409, "A preview is already running");
     const project = this.store.getProject(task.projectId);
-    if (!project.devCommand || !previewUrl(project.devUrl)) {
-      throw new HttpError(409, "Set a dev command and a dev URL on this machine, such as http://localhost:5173, in the project settings.");
-    }
+    if (!previewMode(project)) throw new HttpError(409, PREVIEW_SETUP_HINT);
 
     const abort = new AbortController();
     let finished!: () => void;

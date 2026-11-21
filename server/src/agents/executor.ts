@@ -91,6 +91,18 @@ export function planMarkdown(plan: Plan): string {
   ].join("\n\n");
 }
 
+// A project with a preview page gets a picture of that page for review. The page is not part of the change.
+export function previewNote(project: Project): string[] {
+  if (!project.previewPath || project.devCommand) return [];
+  return [
+    "",
+    `Preview page: ${project.previewPath}`,
+    `If your change affects how something looks, write a plain static page at ${project.previewPath} that shows it, so a screenshot can be taken for review.`,
+    `Link the built CSS and JavaScript${project.previewBuild ? ` (the build command ${project.previewBuild} runs first)` : ""} and write the markup of the changed parts by hand with realistic sample content.`,
+    "Do not commit this page. Leave it out of git add.",
+  ];
+}
+
 export function executorBrief(task: Task, project: Project, plan: Plan, planVersion: number, branch: string, rules: string[] = [], memory: string[] = []): string {
   const commands = [
     project.testCommand && `test: ${project.testCommand}`,
@@ -106,6 +118,7 @@ export function executorBrief(task: Task, project: Project, plan: Plan, planVers
     `Project: ${project.name}`,
     `You are on branch ${branch}, created from ${project.baseBranch}.`,
     commands.length > 0 ? `Project commands: ${commands.join(", ")}` : "Project commands: none configured.",
+    ...previewNote(project),
     "",
     rulesNote(rules),
     memoryNote(memory),

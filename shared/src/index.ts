@@ -38,6 +38,19 @@ export const COLUMN_LABELS: Record<Column, string> = {
 
 const optionalText = z.string().trim().max(1000).nullable().optional();
 
+// A file inside the worktree, written with forward slashes. No absolute paths and no "..".
+export function previewPathProblem(path: string): string | null {
+  if (/^([a-zA-Z]:|[\\/])/.test(path) || path.split(/[\\/]/).includes("..")) return "Use a path inside the repository, such as .dot-preview/index.html";
+  return null;
+}
+const previewPathText = z
+  .string()
+  .trim()
+  .max(300)
+  .refine((p) => p === "" || previewPathProblem(p) === null, "Use a path inside the repository, such as .dot-preview/index.html")
+  .nullable()
+  .optional();
+
 // Where the repository's pull requests live. Dot reads it from the origin remote unless a project sets it.
 export const REPO_HOSTS = ["bitbucket", "github"] as const;
 export const RepoHostSchema = z.enum(REPO_HOSTS);
@@ -85,6 +98,9 @@ const projectFields = z.object({
   browserTesting: z.boolean(),
   devCommand: optionalText,
   devUrl: optionalText,
+  // Without a dev server, Dot serves the worktree and shoots this page. previewBuild runs first.
+  previewPath: previewPathText,
+  previewBuild: optionalText,
   // The Favro board to import cards from: a link copied from Favro, or a board ID.
   favroBoard: optionalText,
   // A CLAUDE_CONFIG_DIR for this project's agents, to use a different Claude login. Null uses the default.
@@ -137,6 +153,8 @@ export const ProjectSchema = z.object({
   browserTesting: z.boolean(),
   devCommand: z.string().nullable(),
   devUrl: z.string().nullable(),
+  previewPath: z.string().nullable(),
+  previewBuild: z.string().nullable(),
   favroBoard: z.string().nullable(),
   claudeConfigDir: z.string().nullable(),
   claudeToken: z.string().nullable(),

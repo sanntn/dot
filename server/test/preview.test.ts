@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_MEMORY_NOTES, MAX_PENDING_MEMORY, planSubtaskProblem, type Plan } from "@dot/shared";
 import { openDb } from "../src/db.ts";
-import { findBrowser, previewUrl } from "../src/preview.ts";
+import { findBrowser, previewMode, previewUrl, serveFolder } from "../src/preview.ts";
 import { Store } from "../src/store.ts";
 
 test("a preview address must be on this machine", () => {
@@ -17,6 +17,45 @@ test("a preview address must be on this machine", () => {
   assert.equal(previewUrl("file:///etc/passwd"), null);
   assert.equal(previewUrl("not a url"), null);
   assert.equal(previewUrl(null), null);
+});
+
+test("a project previews through a dev server or a static page", () => {
+  const store = new Store(openDb(":memory:"));
+  const project = store.createProject({ name: "P", repoPath: "/tmp/p", baseBranch: "main", browserTesting: false } as never);
+  assert.equal(previewMode(project), null);
+  assert.equal(previewMode({ ...project, devCommand: "npm run dev", devUrl: "http://localhost:5173" }), "server");
+  // A dev command with a non-local address is not a preview.
+  assert.equal(previewMode({ ...project, devCommand: "npm run dev", devUrl: "https://example.com" }), null);
+  assert.equal(previewMode({ ...project, previewPath: ".dot-preview/index.html" }), "page");
+  assert.equal(previewMode({ ...project, previewPath: "../outside.html" }), null);
+  assert.equal(previewMode({ ...project, previewPath: "/etc/passwd" }), null);
+  const saved = store.updateProject(project.id, { previewPath: "preview.html", previewBuild: "npm run build" });
+  assert.equal(saved.previewPath, "preview.html");
+  assert.equal(saved.previewBuild, "npm run build");
+});
+
+test("the preview server serves the worktree and nothing outside it", async () => {
+  const outer = mkdtempSync(join(tmpdir(), "dot-site-"));
+  const root = join(outer, "root");
+  mkdirSync(join(root, "assets"), { recursive: true });
+  writeFileSync(join(root, "index.html"), "<h1>home</h1>");
+  writeFileSync(join(root, "assets", "main.css"), "body{}");
+  writeFileSync(join(outer, "secret.txt"), "secret");
+  const site = await serveFolder(root);
+  try {
+    const get = (path: string) => fetch(new URL(path, site.url));
+    const home = await get("/");
+    assert.equal(home.status, 200);
+    assert.equal(await home.text(), "<h1>home</h1>");
+    const css = await get("/assets/main.css");
+    assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+    assert.equal((await get("/missing.html")).status, 404);
+    assert.equal((await get("/%2e%2e/secret.txt")).status, 404);
+    assert.equal((await get("/..%2fsecret.txt")).status, 404);
+    assert.equal((await fetch(site.url, { method: "POST" })).status, 404);
+  } finally {
+    site.close();
+  }
 });
 
 test("DOT_BROWSER_BIN names the browser, and a wrong path finds none", () => {

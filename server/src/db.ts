@@ -383,6 +383,12 @@ export const MIGRATIONS: string[] = [
   -- The Favro board a project imports cards from: a link copied from Favro, or a board ID.
   ALTER TABLE projects ADD COLUMN favro_board TEXT;
   `,
+  `
+  -- A project with no dev server can preview a static page from the worktree instead. preview_build runs
+  -- first, to build the CSS and JavaScript the page links.
+  ALTER TABLE projects ADD COLUMN preview_path TEXT;
+  ALTER TABLE projects ADD COLUMN preview_build TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;
