@@ -163,7 +163,7 @@ export function TaskSheet({ task, tasks, project, onClose }: { task: Task; tasks
 
   // A preview runs in the background for up to a minute. It is over once a picture, an error or a stop notice follows its start notice.
   const previewing = useMemo(() => {
-    const start = messages.findLastIndex((m) => m.text === "Starting the dev server for a preview.");
+    const start = messages.findLastIndex((m) => m.text === "Starting a preview." || m.text === "Starting the dev server for a preview.");
     if (start === -1) return false;
     return !messages
       .slice(start + 1)
@@ -309,14 +309,13 @@ export function TaskSheet({ task, tasks, project, onClose }: { task: Task; tasks
                   void act("site", async () => {
                     // The tab opens first, inside the click, so a pop-up blocker lets it through.
                     const tab = window.open("about:blank", "_blank");
+                    if (!tab) throw new Error("Your browser blocked the new tab. Allow pop-ups for this site and try again.");
                     try {
                       const { url } = await api.siteLink(task.id);
-                      if (tab) {
-                        tab.opener = null;
-                        tab.location.href = url;
-                      } else window.location.assign(url);
+                      tab.opener = null;
+                      tab.location.href = url;
                     } catch (err) {
-                      tab?.close();
+                      tab.close();
                       throw err;
                     }
                   })

@@ -52,6 +52,7 @@ import {
   EXECUTOR_SYSTEM_PROMPT,
   EXECUTOR_TOOLS,
   executorBrief,
+  previewPageRules,
 } from "./agents/executor.ts";
 import {
   REVIEWER_DENIED_TOOLS,
@@ -846,7 +847,7 @@ ${checksSummary(results)}` });
     const abort = new AbortController();
     let finished!: () => void;
     this.previewAborts.set(taskId, { abort, done: new Promise<void>((resolve) => (finished = resolve)) });
-    this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "Starting the dev server for a preview." });
+    this.store.addMessage({ taskId, runId: null, role: "system", kind: "status", text: "Starting a preview." });
     this.publish(taskId);
     const worktree = task.worktreePath;
     void (async () => {
@@ -1250,10 +1251,10 @@ ${err instanceof Error ? err.message : String(err)}` });
     };
     // At Merge approval the executor may write the project's preview page, and nothing else, so a branch
     // that was built without one can still get a preview. Dot keeps the page out of git.
-    const previewPage = run.stage === "execute" && task.column === "merge_approval" && !project.devCommand ? project.previewPath : null;
-    if (previewPage && !previewPathProblem(previewPage)) {
+    const pageRules = previewPageRules(project, task, run.stage);
+    if (pageRules) {
       readOnly.tools = [...RESEARCHER_TOOLS, "Write", "Edit"];
-      readOnly.allowedTools = [...readOnly.allowedTools, `Write(${previewPage})`, `Edit(${previewPage})`];
+      readOnly.allowedTools = [...readOnly.allowedTools, ...pageRules];
     }
     const stage: StageConfig =
       run.stage === "research"

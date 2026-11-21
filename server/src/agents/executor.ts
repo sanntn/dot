@@ -1,4 +1,4 @@
-import type { Plan, Project, Task } from "@dot/shared";
+import { previewPathProblem, type AgentStage, type Plan, type Project, type Task } from "@dot/shared";
 import { memoryNote, rulesNote } from "./rules.ts";
 
 export const EXECUTOR_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebSearch", "WebFetch"];
@@ -89,6 +89,15 @@ export function planMarkdown(plan: Plan): string {
     `## Assumptions\n${list(plan.assumptions)}`,
     `## Risks\n${list(plan.risks)}`,
   ].join("\n\n");
+}
+
+// What the executor may write at Merge approval, when it is only chatting: the project's preview page and nothing
+// else. Null when the stage, column or project does not call for it. A rule names one path, so every other file
+// stays closed to the agent.
+export function previewPageRules(project: Project, task: Pick<Task, "column">, stage: AgentStage): string[] | null {
+  const page = project.previewPath;
+  if (stage !== "execute" || task.column !== "merge_approval" || project.devCommand || !page || previewPathProblem(page)) return null;
+  return [`Write(${page})`, `Edit(${page})`];
 }
 
 // A project with a preview page gets a picture of that page for review. The page is not part of the change.

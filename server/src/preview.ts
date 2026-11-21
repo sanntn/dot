@@ -1,11 +1,12 @@
-import { spawn } from "node:child_process";
-import { createReadStream, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { createServer } from "node:http";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, extname, join, relative, resolve, sep } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { previewPathProblem, type Project } from "@dot/shared";
 import { killTree, plainEnv } from "./checks.ts";
+import { git, uncommittedChanges } from "./git.ts";
 import { asAgent, handOver, isolated } from "./isolation.ts";
+import { serveFolder } from "./site.ts";
 
 // Starts a task's dev server in its worktree, opens the page in a headless browser and takes a picture,
 // so you can judge a change by looking at it. The dev server runs code from the task branch, and so does
@@ -71,10 +72,9 @@ async function answers(url: URL): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function runBrowser(bin: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
+// Collects a child process's output (the last 4000 characters) and ends it when the time runs out or the signal fires.
+function capture(child: ChildProcess, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const [command, wrapped] = asAgent(bin, args);
-    const child = spawn(command, wrapped, { env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" });
     let output = "";
     const take = (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-4000);
@@ -97,6 +97,19 @@ function runBrowser(bin: string, args: string[], timeoutMs: number, signal?: Abo
   });
 }
 
+// A shell command in the worktree, as the agent user when isolation is on. On POSIX it leads its own process
+// group, so killing it reaches everything it started.
+function spawnShell(command: string, cwd: string): ChildProcess {
+  const [bin, args] = asAgent("sh", ["-c", command]);
+  const options = { cwd, env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" };
+  return bin === "sh" ? spawn(command, { ...options, shell: true }) : spawn(bin, args, options);
+}
+
+function runBrowser(bin: string, args: string[], timeoutMs: number, signal?: AbortSignal) {
+  const [command, wrapped] = asAgent(bin, args);
+  return capture(spawn(command, wrapped, { env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" }), timeoutMs, signal);
+}
+
 // How a project previews: a dev server it starts, or a static page Dot serves from the worktree.
 export function previewMode(project: Project): "server" | "page" | null {
   if (project.devCommand && previewUrl(project.devUrl)) return "server";
@@ -106,102 +119,6 @@ export function previewMode(project: Project): "server" | "page" | null {
 
 export const PREVIEW_SETUP_HINT =
   "Set a dev command and a dev URL on this machine, such as http://localhost:5173, or a preview page such as .dot-preview/index.html, in the project settings.";
-
-const TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".htm": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".otf": "font/otf",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-};
-
-export const contentTypeOf = (file: string) => TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
-
-// The file a URL path names inside a folder, or null. Directories answer with their index.html. Anything that
-// resolves outside the folder, symlinks included, is refused, and so are git's own files and .env files.
-export function resolveInside(root: string, urlPath: string): string | null {
-  try {
-    const base = realpathSync(root);
-    const path = decodeURIComponent(urlPath);
-    let file = resolve(base, `.${path.startsWith("/") ? path : `/${path}`}`);
-    if (statSync(file).isDirectory()) file = join(file, "index.html");
-    file = realpathSync(file);
-    if (file !== base && !file.startsWith(base + sep)) return null;
-    if (!statSync(file).isFile()) return null;
-    const parts = relative(base, file).split(sep);
-    if (parts.includes(".git") || parts.some((p) => p.startsWith(".env"))) return null;
-    return file;
-  } catch {
-    return null;
-  }
-}
-
-// Serves a folder over HTTP on a free loopback port.
-export function serveFolder(root: string): Promise<{ url: URL; close: () => void }> {
-  const server = createServer((req, res) => {
-    const deny = () => {
-      res.writeHead(404, { "content-type": "text/plain" });
-      res.end("Not found");
-    };
-    if (req.method !== "GET" && req.method !== "HEAD") return deny();
-    const file = resolveInside(root, new URL(req.url ?? "/", "http://localhost").pathname);
-    if (!file) return deny();
-    res.writeHead(200, { "content-type": contentTypeOf(file), "cache-control": "no-store" });
-    if (req.method === "HEAD") res.end();
-    else createReadStream(file).on("error", () => res.destroy()).pipe(res);
-  });
-  return new Promise((resolveServer, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") return reject(new Error("The preview server has no port"));
-      resolveServer({ url: new URL(`http://127.0.0.1:${address.port}/`), close: () => server.close() });
-    });
-  });
-}
-
-// Runs the build command in the worktree, as the agent user when isolation is on.
-function runBuild(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
-  return new Promise((resolveBuild) => {
-    const [bin, args] = asAgent("sh", ["-c", command]);
-    const options = { cwd, env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" };
-    const child = bin === "sh" ? spawn(command, { ...options, shell: true }) : spawn(bin, args, options);
-    let output = "";
-    const take = (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-4000);
-    };
-    child.stdout?.on("data", take);
-    child.stderr?.on("data", take);
-    const timer = setTimeout(() => killTree(child), timeoutMs);
-    const stop = () => killTree(child);
-    if (signal?.aborted) stop();
-    else signal?.addEventListener("abort", stop, { once: true });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolveBuild({ ok: false, output: err.message });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", stop);
-      resolveBuild({ ok: code === 0, output });
-    });
-  });
-}
 
 // Takes the picture of a page that is already answering.
 async function shoot(bin: string, url: URL, signal?: AbortSignal): Promise<PreviewResult> {
@@ -241,22 +158,30 @@ async function shoot(bin: string, url: URL, signal?: AbortSignal): Promise<Previ
 // Builds the worktree, serves it and shoots the project's preview page.
 async function capturePage(project: Project, cwd: string, bin: string, signal?: AbortSignal): Promise<PreviewResult> {
   const page = project.previewPath!;
-  if (project.previewBuild) {
-    const built = await runBuild(project.previewBuild, cwd, BUILD_TIMEOUT_MS, signal);
-    if (signal?.aborted) return { ok: false, error: "Stopped." };
-    if (!built.ok) return { ok: false, error: `The build command failed.\n\n${built.output.trim() || "(no output)"}` };
-  }
-  const file = resolve(cwd, page);
-  if (!existsSync(file)) {
-    return { ok: false, error: `This branch has no ${page}. Ask the agent to write that page, then try again.` };
-  }
-  const site = await serveFolder(cwd);
+  // A worktree that is clean before the build holds committed work only, so whatever the build rewrote in
+  // tracked files (built CSS and JS that the repo commits) can be put back afterwards. Files that git ignores
+  // keep the build, which is what the Open page link then serves.
+  const clean = project.previewBuild ? (await uncommittedChanges(cwd).catch(() => null)) === "" : false;
   try {
-    const url = new URL(page.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/"), site.url);
-    const result = await shoot(bin, url, signal);
-    return result.ok ? { ...result, note: `Preview of ${page} from this branch, 1280 pixels wide.` } : result;
+    if (project.previewBuild) {
+      const built = await capture(spawnShell(project.previewBuild, cwd), BUILD_TIMEOUT_MS, signal);
+      if (signal?.aborted) return { ok: false, error: "Stopped." };
+      if (!built.ok) return { ok: false, error: `The build command failed.\n\n${built.output.trim() || "(no output)"}` };
+    }
+    if (!existsSync(resolve(cwd, page))) {
+      return { ok: false, error: `This branch has no ${page}. Ask the agent to write that page, then try again.` };
+    }
+    // Served under /site/ like the Open page link, so an asset linked with an absolute path fails here too.
+    const site = await serveFolder(cwd, "/site/");
+    try {
+      const url = new URL(page.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/"), site.url);
+      const result = await shoot(bin, url, signal);
+      return result.ok ? { ...result, note: `Preview of ${page} from this branch, 1280 pixels wide.` } : result;
+    } finally {
+      site.close();
+    }
   } finally {
-    site.close();
+    if (clean) await git(cwd, ["checkout", "--", "."]).catch(() => undefined);
   }
 }
 
@@ -278,10 +203,7 @@ async function captureDevServer(project: Project, cwd: string, bin: string, sign
   }
 
   // The dev server leads its own process group on POSIX, so killing it reaches everything it started.
-  const devCommand = project.devCommand!;
-  const [command, args] = asAgent("sh", ["-c", devCommand]);
-  const options = { cwd, env: plainEnv(), windowsHide: true, detached: process.platform !== "win32" };
-  const server = command === "sh" ? spawn(devCommand, { ...options, shell: true }) : spawn(command, args, options);
+  const server = spawnShell(project.devCommand!, cwd);
   let log = "";
   let exited = false;
   const take = (chunk: Buffer) => {

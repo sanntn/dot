@@ -43,7 +43,7 @@ import {
   TaskPatchSchema,
   previewPathProblem,
 } from "@dot/shared";
-import { contentTypeOf, resolveInside } from "./preview.ts";
+import { fileResponse, resolveInside } from "./site.ts";
 import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -809,8 +809,7 @@ export function createApp(
     const rest = new URL(c.req.url).pathname.slice(`/api/site/${token}`.length) || "/";
     const file = resolveInside(task.worktreePath, rest);
     if (!file) throw notFound("Page");
-    return c.body(readFileSync(file), 200, {
-      "Content-Type": contentTypeOf(file),
+    return fileResponse(file, c.req.method, c.req.header("range"), {
       // No same-origin rights: the page cannot call Dot's API, read its cookies or open its storage.
       "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups",
       "X-Content-Type-Options": "nosniff",

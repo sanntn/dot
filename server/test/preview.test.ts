@@ -10,7 +10,9 @@ import { createApp } from "../src/app.ts";
 import { Auth } from "../src/auth.ts";
 import { EventBus } from "../src/events.ts";
 import { excludeFromGit } from "../src/git.ts";
-import { findBrowser, previewMode, previewUrl, serveFolder } from "../src/preview.ts";
+import { previewNote, previewPageRules } from "../src/agents/executor.ts";
+import { capturePreview, findBrowser, previewMode, previewUrl } from "../src/preview.ts";
+import { fileResponse, parseRange, serveFolder } from "../src/site.ts";
 import { Store } from "../src/store.ts";
 
 test("a preview address must be on this machine", () => {
@@ -192,4 +194,130 @@ test("a preview link opens the page in a sandbox and refuses anything outside th
   assert.equal((await app.request(`/api/tasks/${task.id}`, { headers })).status, 401);
   assert.equal(auth.siteTaskId(token), task.id);
   assert.equal(auth.siteTaskId(token.replace(`${task.id}.`, `${task.id + 1}.`)), null);
+});
+
+test("a preview server answers under its prefix only", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dot-prefix-"));
+  mkdirSync(join(root, "theme"));
+  writeFileSync(join(root, "theme", "main.css"), "body{}");
+  const site = await serveFolder(root, "/site/");
+  try {
+    assert.equal(site.url.pathname, "/site/");
+    assert.equal((await fetch(new URL("theme/main.css", site.url))).status, 200);
+    // An absolute link skips the prefix, as it does behind the Open page link.
+    assert.equal((await fetch(new URL("/theme/main.css", site.url))).status, 404);
+  } finally {
+    site.close();
+  }
+});
+
+test("ranges are read the way browsers send them", () => {
+  assert.deepEqual(parseRange("bytes=0-9", 100), { start: 0, end: 9 });
+  assert.deepEqual(parseRange("bytes=90-", 100), { start: 90, end: 99 });
+  assert.deepEqual(parseRange("bytes=-10", 100), { start: 90, end: 99 });
+  assert.deepEqual(parseRange("bytes=50-500", 100), { start: 50, end: 99 });
+  assert.equal(parseRange("bytes=100-", 100), "invalid");
+  assert.equal(parseRange("bytes=-0", 100), "invalid");
+  assert.equal(parseRange("bytes=0-1,5-9", 100), null);
+  assert.equal(parseRange("items=0-1", 100), null);
+  assert.equal(parseRange(undefined, 100), null);
+});
+
+test("files stream with ranges, and an empty file is not a range error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dot-file-"));
+  const file = join(dir, "note.txt");
+  writeFileSync(file, "0123456789");
+  const whole = fileResponse(file, "GET", null);
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(await whole.text(), "0123456789");
+  const part = fileResponse(file, "GET", "bytes=2-4");
+  assert.equal(part.status, 206);
+  assert.equal(part.headers.get("content-range"), "bytes 2-4/10");
+  assert.equal(await part.text(), "234");
+  assert.equal(fileResponse(file, "GET", "bytes=50-").status, 416);
+  const head = fileResponse(file, "HEAD", null);
+  assert.equal(head.headers.get("content-length"), "10");
+  assert.equal(await head.text(), "");
+  const empty = join(dir, "empty.txt");
+  writeFileSync(empty, "");
+  assert.equal(fileResponse(empty, "GET", null).status, 200);
+});
+
+test("the executor may write the preview page at Merge approval, and nothing else", () => {
+  const store = new Store(openDb(":memory:"));
+  const base = store.createProject({ name: "P", repoPath: "/tmp/p", baseBranch: "main", browserTesting: false } as never);
+  const page = { ...base, previewPath: ".dot-preview/index.html" };
+  const approval = { column: "merge_approval" } as const;
+  assert.deepEqual(previewPageRules(page, approval, "execute"), ["Write(.dot-preview/index.html)", "Edit(.dot-preview/index.html)"]);
+  assert.equal(previewPageRules(page, { column: "execute" }, "execute"), null);
+  assert.equal(previewPageRules(page, approval, "review"), null);
+  assert.equal(previewPageRules(base, approval, "execute"), null);
+  assert.equal(previewPageRules({ ...page, devCommand: "npm run dev" }, approval, "execute"), null);
+  assert.equal(previewPageRules({ ...page, previewPath: "../x.html" }, approval, "execute"), null);
+});
+
+test("the executor brief asks for a relative, self-contained preview page", () => {
+  const store = new Store(openDb(":memory:"));
+  const base = store.createProject({ name: "P", repoPath: "/tmp/p", baseBranch: "main", browserTesting: false } as never);
+  assert.deepEqual(previewNote(base), []);
+  assert.deepEqual(previewNote({ ...base, previewPath: "p.html", devCommand: "npm run dev" }), []);
+  const note = previewNote({ ...base, previewPath: "p.html", previewBuild: "npm run build" }).join(" ");
+  assert.match(note, /p.html/);
+  assert.match(note, /npm run build/);
+  assert.match(note, /relative links/);
+});
+
+// capturePreview with a stand-in browser path: these cases end before the browser would start.
+async function withBrowserPath<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = process.env.DOT_BROWSER_BIN;
+  process.env.DOT_BROWSER_BIN = process.execPath;
+  try {
+    return await fn();
+  } finally {
+    if (saved === undefined) delete process.env.DOT_BROWSER_BIN;
+    else process.env.DOT_BROWSER_BIN = saved;
+  }
+}
+
+function tinyRepo(): { dir: string; run: (...args: string[]) => string } {
+  const dir = mkdtempSync(join(tmpdir(), "dot-page-"));
+  const run = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir, encoding: "utf8" });
+  run("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "built.css"), "committed");
+  writeFileSync(join(dir, "work.txt"), "committed");
+  run("add", ".");
+  run("commit", "-q", "-m", "init");
+  return { dir, run };
+}
+
+test("a failing build or a missing page ends the preview with a clear error", async () => {
+  const { dir } = tinyRepo();
+  const store = new Store(openDb(":memory:"));
+  const base = store.createProject({ name: "P", repoPath: dir, baseBranch: "main", browserTesting: false } as never);
+  const project = { ...base, previewPath: ".dot-preview/index.html" };
+  await withBrowserPath(async () => {
+    const failed = await capturePreview({ ...project, previewBuild: "exit 3" }, dir);
+    assert.equal(failed.ok, false);
+    assert.match(failed.ok ? "" : failed.error, /build command failed/);
+    const missing = await capturePreview(project, dir);
+    assert.match(missing.ok ? "" : missing.error, /This branch has no/);
+  });
+});
+
+test("the preview build leaves a clean worktree as it found it, and never touches unfinished work", async () => {
+  const { dir } = tinyRepo();
+  const store = new Store(openDb(":memory:"));
+  const base = store.createProject({ name: "P", repoPath: dir, baseBranch: "main", browserTesting: false } as never);
+  const project = { ...base, previewPath: ".dot-preview/index.html", previewBuild: "echo rebuilt> built.css" };
+  await withBrowserPath(async () => {
+    await capturePreview(project, dir);
+    assert.equal(readFileSync(join(dir, "built.css"), "utf8"), "committed");
+
+    // Uncommitted work means the build cannot be told apart from it, so nothing is restored.
+    writeFileSync(join(dir, "work.txt"), "unfinished");
+    await capturePreview(project, dir);
+    assert.equal(readFileSync(join(dir, "work.txt"), "utf8"), "unfinished");
+    assert.match(readFileSync(join(dir, "built.css"), "utf8"), /rebuilt/);
+  });
 });
