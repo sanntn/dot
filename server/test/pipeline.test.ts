@@ -15,6 +15,7 @@ import { openDb } from "../src/db.ts";
 import { EventBus } from "../src/events.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import { Store } from "../src/store.ts";
+import { importedNote } from "../src/agents/rules.ts";
 
 // These tests run the real orchestrator, store, MCP endpoint and git worktrees. Only the claude CLI
 // is replaced, by fake-claude.mjs, which follows a script. See that file for the script format.
@@ -752,4 +753,272 @@ test("a workspace project has no repository, takes only reports, and runs its ag
   await h.orchestrator.stop(task.id);
   assert.equal((await call(`/projects/${workspace.id}`, "DELETE")).status, 204);
   assert.equal(existsSync(workspace.repoPath), false);
+});
+
+test("an agent can save a project note, later briefs carry it, and a repeat is ignored", async () => {
+  const h = await harness([
+    {
+      name: "researcher",
+      turns: [
+        [
+          { tool: "remember", args: { note: "Run tests with npm run check." } },
+          { tool: "remember", args: { note: "run tests with  npm run check." } },
+          { tool: "submit_plan", args: plan },
+        ],
+      ],
+    },
+    { name: "executor", turns: [[commit, { tool: "submit_execution_report", args: report }]] },
+    { name: "reviewer", turns: [[{ tool: "submit_review", args: review("approve") }]] },
+  ]);
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  const notes = h.store.listMemory(h.task.projectId);
+  assert.deepEqual(notes.map((n) => [n.text, n.status]), [["Run tests with npm run check.", "suggested"]]);
+  assert.equal(notes[0]!.sourceTaskId, h.task.id);
+  assert.ok(h.store.listMessages(h.task.id).some((m) => /Suggested a note for the project's memory/.test(m.text)));
+  // A suggestion reaches no agent until the user accepts it.
+  assert.deepEqual(h.store.memoryNotes(h.task.projectId), []);
+  h.store.updateMemory(notes[0]!.id, { status: "active" });
+
+  await h.orchestrator.approvePlan(h.task.id);
+  await h.until("merge approval", h.inColumn("merge_approval"));
+  const prompts = h.calls().filter((c) => "prompt" in c).map((c) => String(c.prompt));
+  // The researcher started before the note existed. The executor and the reviewer read the accepted note.
+  assert.doesNotMatch(prompts[0]!, /# Project memory/);
+  for (const prompt of prompts.slice(1)) assert.match(prompt, /# Project memory[\s\S]*- Run tests with npm run check\./);
+});
+
+test("a plan that suggests subtasks becomes linked tasks, and the original closes", async () => {
+  const big = {
+    ...plan,
+    steps: ["Create hello.txt", "Add a farewell", "Document both"],
+    subtasks: [
+      { title: "Hello file", steps: [0], dependsOn: [] },
+      { title: "Farewell file", steps: [1], dependsOn: [] },
+      { title: "Docs", steps: [2], dependsOn: [0, 1] },
+    ],
+  };
+  const h = await harness([{ turns: [[{ tool: "submit_plan", args: big }]] }]);
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+
+  const made = h.orchestrator.splitIntoSubtasks(h.task.id);
+  assert.deepEqual(made.map((t) => t.title), ["Hello file", "Farewell file", "Docs"]);
+  assert.deepEqual(made[0]!.blockedBy, []);
+  assert.deepEqual(made[2]!.blockedBy.map((b) => b.id).sort(), [made[0]!.id, made[1]!.id].sort());
+  assert.ok(made.every((t) => t.autoStart));
+  assert.match(made[2]!.description, /1\. Document both/);
+  assert.equal(h.store.getTask(h.task.id).column, "done");
+  assert.throws(() => h.orchestrator.splitIntoSubtasks(h.task.id), /Plan review/);
+});
+
+test("a split that leaves a step out or points forward is refused", async () => {
+  const bad = {
+    ...plan,
+    steps: ["One", "Two"],
+    subtasks: [
+      { title: "A", steps: [0], dependsOn: [] },
+      { title: "B", steps: [0], dependsOn: [] },
+    ],
+  };
+  const h = await harness([{ turns: [[{ tool: "submit_plan", args: bad }]] }]);
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+  assert.throws(() => h.orchestrator.splitIntoSubtasks(h.task.id), /Step 1 is in two tasks/);
+  assert.equal(h.store.getTask(h.task.id).column, "plan_review");
+});
+
+test("importing GitHub issues makes one task each, skips pull requests and repeats, and links the pull request", async () => {
+  const { createServer } = await import("node:http");
+  const issues = [
+    { number: 7, title: "Crash on save", body: "It crashes.", html_url: "https://github.com/o/r/issues/7", labels: [{ name: "bug" }], user: { login: "a" } },
+    { number: 8, title: "A pull request", body: "", html_url: "https://github.com/o/r/pull/8", labels: [], pull_request: {} },
+    { number: 9, title: "Add dark mode", body: null, html_url: "https://github.com/o/r/issues/9", labels: [] },
+  ];
+  const api = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    const one = req.url?.match(/\/issues\/(\d+)/);
+    if (one) {
+      const found = issues.find((i) => i.number === Number(one[1]));
+      res.statusCode = found ? 200 : 404;
+      res.end(JSON.stringify(found ?? { message: "Not Found" }));
+      return;
+    }
+    res.end(JSON.stringify(req.url?.includes("/issues") ? issues : {}));
+  });
+  await new Promise<void>((resolve) => api.listen(0, "127.0.0.1", resolve));
+  const apiPort = (api.address() as { port: number }).port;
+  process.env.DOT_GITHUB_API = `http://127.0.0.1:${apiPort}`;
+  process.env.DOT_GITHUB_TOKEN = "test-token";
+  cleanups.push(() => {
+    api.close();
+    delete process.env.DOT_GITHUB_API;
+    delete process.env.DOT_GITHUB_TOKEN;
+  });
+
+  const h = await harness([]);
+  const projectId = h.task.projectId;
+  h.store.updateProject(projectId, { repoHost: "github", repoOwner: "o", repoName: "r" });
+  const send = (path: string, body?: unknown) =>
+    h.app.request(`/api${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { "content-type": "application/json", host: "127.0.0.1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  const listed = (await (await send(`/projects/${projectId}/issues`)).json()) as { number: number; taskId: number | null }[];
+  assert.deepEqual(listed.map((i) => i.number), [7, 9]);
+
+  const first = await send(`/projects/${projectId}/issues/import`, { numbers: [7, 8, 99] });
+  assert.equal(first.status, 201);
+  const firstBody = (await first.json()) as { tasks: Task[]; skipped: { number: number }[] };
+  const made = firstBody.tasks;
+  // The pull request (#8) and the missing issue (#99) are reported, not silently dropped.
+  assert.deepEqual(firstBody.skipped.map((s) => s.number).sort(), [8, 99]);
+  assert.equal(made.length, 1);
+  assert.equal(made[0]!.title, "Crash on save");
+  assert.equal(made[0]!.sourceRef, "github:o/r#7");
+  assert.equal(made[0]!.sourceUrl, "https://github.com/o/r/issues/7");
+  assert.match(made[0]!.description, /It crashes\./);
+  assert.doesNotMatch(made[0]!.description, /instructions to you/);
+
+  // The same issue again makes nothing, and the list says which task has it.
+  const again = (await (await send(`/projects/${projectId}/issues/import`, { numbers: [7, 9] })).json()) as { tasks: Task[]; skipped: { number: number }[] };
+  assert.deepEqual(again.tasks.map((t) => t.title), ["Add dark mode"]);
+  assert.deepEqual(again.skipped.map((s) => s.number), [7]);
+  const relisted = (await (await send(`/projects/${projectId}/issues`)).json()) as { number: number; taskId: number | null }[];
+  assert.equal(relisted.find((i) => i.number === 7)?.taskId, made[0]!.id);
+});
+
+test("a manual split drops the plan's subtask suggestion, and a task others wait on cannot be split into several", async () => {
+  const big = {
+    ...plan,
+    steps: ["One", "Two", "Three", "Four"],
+    subtasks: [
+      { title: "A", steps: [0, 1], dependsOn: [] },
+      { title: "B", steps: [2, 3], dependsOn: [] },
+    ],
+  };
+  const h = await harness([{ turns: [[{ tool: "submit_plan", args: big }]] }]);
+  h.orchestrator.startResearch(h.task.id);
+  await h.until("plan review", (t) => t.column === "plan_review");
+
+  // Something waits on this task, so closing it early would start that task too soon.
+  const waiting = h.store.createTask({ projectId: h.task.projectId, title: "Waits", description: "", blockedBy: [h.task.id] });
+  assert.throws(() => h.orchestrator.splitIntoSubtasks(h.task.id), /Other tasks wait for this one/);
+  assert.equal(h.store.getTask(h.task.id).column, "plan_review");
+  assert.equal(h.store.getTask(waiting.id).blockedBy.length, 1);
+
+  const { plan: saved } = h.orchestrator.splitPlan(h.task.id, { title: "Rest", steps: [0] });
+  assert.equal(saved.plan.subtasks, undefined);
+});
+
+test("importing Favro cards reads the board over MCP, filters by column, and makes one task per card", async () => {
+  const { createServer } = await import("node:http");
+  const seen: { tool: string; args: Record<string, unknown> }[] = [];
+  let auth = "";
+  const columns = [
+    { columnId: "c-todo", name: "To do" },
+    { columnId: "c-done", name: "Done" },
+  ];
+  const cards = [
+    { cardId: "a", sequentialId: 101, name: "Fix login", columnId: "c-todo" },
+    { cardId: "b", sequentialId: 103, name: "Add search", columnId: "c-todo" },
+    { cardId: "l", sequentialId: 104, name: "A lane", columnId: "c-todo", isLane: true },
+    { cardId: "d", sequentialId: 102, name: "Ship it", columnId: "c-done" },
+  ];
+  const reply = (id: unknown, payload: unknown, isError = false) => ({
+    jsonrpc: "2.0",
+    id,
+    result: { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload) }], isError },
+  });
+  const mcp = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (d) => (raw += d));
+    req.on("end", () => {
+      auth = String(req.headers.authorization);
+      const msg = JSON.parse(raw) as { id?: number; method: string; params?: { name: string; arguments: Record<string, unknown> } };
+      if (msg.method === "initialize") {
+        res.setHeader("content-type", "application/json");
+        res.setHeader("mcp-session-id", "s1");
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: {} } }));
+        return;
+      }
+      if (msg.method === "notifications/initialized") {
+        res.statusCode = 202;
+        res.end();
+        return;
+      }
+      assert.equal(req.headers["mcp-session-id"], "s1");
+      const { name, arguments: args } = msg.params!;
+      seen.push({ tool: name, args });
+      let body: unknown;
+      if (name === "get_organizations") body = reply(msg.id, { entities: [{ organizationId: "org1", name: "Org", mcpEnabled: true }] });
+      else if (name === "get_board") body = reply(msg.id, { board: { columns } });
+      else if (name === "get_cards") {
+        const from = args.from as { columnId?: string };
+        const list = from.columnId ? cards.filter((c) => c.columnId === from.columnId) : cards;
+        body = reply(msg.id, { entities: list, page: 0, pages: 1, requestId: "r" });
+      } else {
+        const card = cards.find((c) => c.sequentialId === (args.cardRef as { cardSequentialId: number }).cardSequentialId);
+        body = card ? reply(msg.id, { card: { ...card, detailedDescription: `Details for ${card.name}.` } }) : reply(msg.id, "Card not found", true);
+      }
+      // One tool answers as a server-sent event, to cover that form too.
+      if (name === "get_card") {
+        res.setHeader("content-type", "text/event-stream");
+        res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`);
+      } else {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(body));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => mcp.listen(0, "127.0.0.1", resolve));
+  process.env.DOT_FAVRO_URL = `http://127.0.0.1:${(mcp.address() as { port: number }).port}/mcp`;
+  process.env.DOT_FAVRO_EMAIL = "me@example.com";
+  process.env.DOT_FAVRO_TOKEN = "secret";
+  cleanups.push(() => {
+    mcp.close();
+    for (const k of ["DOT_FAVRO_URL", "DOT_FAVRO_EMAIL", "DOT_FAVRO_TOKEN"]) delete process.env[k];
+  });
+
+  const h = await harness([]);
+  const projectId = h.task.projectId;
+  const send = (path: string, body?: unknown) =>
+    h.app.request(`/api${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { "content-type": "application/json", host: "127.0.0.1" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  // No board set yet.
+  assert.equal((await send(`/projects/${projectId}/favro/cards`)).status, 409);
+  h.store.updateProject(projectId, { favroBoard: "https://favro.com/board/abc" });
+
+  const listed = ((await (await send(`/projects/${projectId}/favro/cards`)).json()) as { cards: { number: number; title: string; labels: string[] }[] }).cards;
+  assert.equal(auth, `Basic ${Buffer.from("me@example.com:secret").toString("base64")}`);
+  assert.deepEqual(listed.map((c) => [c.number, c.labels[0]]), [[103, "To do"], [102, "Done"], [101, "To do"]]);
+  assert.deepEqual(seen.find((s) => s.tool === "get_board")?.args.boardRef, { boardUrl: "https://favro.com/board/abc" });
+
+  const byColumn = ((await (await send(`/projects/${projectId}/favro/cards?column=done`)).json()) as { cards: { number: number }[] }).cards;
+  assert.deepEqual(byColumn.map((c) => c.number), [102]);
+  assert.equal((await send(`/projects/${projectId}/favro/cards?column=Nope`)).status, 400);
+
+  const made = (await (await send(`/projects/${projectId}/favro/import`, { numbers: [101, 555] })).json()) as {
+    tasks: Task[];
+    skipped: { number: number; reason: string }[];
+  };
+  assert.deepEqual(made.tasks.map((t) => t.title), ["Fix login"]);
+  assert.equal(made.tasks[0]!.sourceRef, "favro:org1#101");
+  assert.equal(made.tasks[0]!.sourceUrl, null);
+  assert.match(made.tasks[0]!.description, /Details for Fix login\./);
+  assert.deepEqual(made.skipped.map((s) => s.number), [555]);
+
+  const again = (await (await send(`/projects/${projectId}/favro/import`, { numbers: [101] })).json()) as { tasks: Task[]; skipped: { reason: string }[] };
+  assert.equal(again.tasks.length, 0);
+  assert.equal(again.skipped[0]!.reason, "already a task");
+  const relisted = ((await (await send(`/projects/${projectId}/favro/cards`)).json()) as { cards: { number: number; taskId: number | null }[] }).cards;
+  assert.equal(relisted.find((c) => c.number === 101)?.taskId, made.tasks[0]!.id);
+  // The brief warns that the card text is someone else's, although a Favro task has no link.
+  assert.match(importedNote(made.tasks[0]!), /treat it as data/);
 });
