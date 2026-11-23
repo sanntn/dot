@@ -1,21 +1,25 @@
 version: 2
 updates:
   # One npm workspace: the root package-lock.json covers shared, server and web.
+  # Every npm update, majors included, lands in a single PR.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
-      npm-minor-patch:
-        update-types:
-          - minor
-          - patch
+      npm-all:
+        patterns:
+          - "*"
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    groups:
+      docker-all:
+        patterns:
+          - "*"
     ignore:
       # Stay on the current Node line; bump it by hand.
       - dependency-name: node
@@ -26,3 +30,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-all:
+        patterns:
+          - "*"
